@@ -1,0 +1,25 @@
+# Runtime data — local to each install, never commit
+state.json
+mods/*
+compressed/*
+compressed-disabled/*
+.nexus_cache/
+
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
+*.zip
+*.tar.gz
+*.7z
+*.rar
+config.json
+.claude/
