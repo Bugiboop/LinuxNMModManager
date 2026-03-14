@@ -33,29 +33,22 @@ Your game directory is never directly overwritten. Every mod file is installed a
 
 | Requirement | Notes |
 |---|---|
-| Python 3.10+ | |
-| `customtkinter` | GUI only — installed into `.venv` (see below) |
-| `Pillow` | GUI only — for cover art display |
 | `p7zip-full` | Only needed for `.rar` / `.7z` archives |
 
 ```bash
 sudo apt install p7zip-full   # Debian / Ubuntu
 ```
 
+Python, pip, and a virtual environment are **not required** when using the pre-built executable. They are only needed if you are [running from source](#running-from-source).
+
 ---
 
 ## Installation
 
-```bash
-git clone https://github.com/Bugiboop/LinuxNMModManager.git
-cd LinuxNMMofManager
+### Pre-built executable (recommended)
 
-# Create the virtual environment and install GUI dependencies
-python3 -m venv .venv
-.venv/bin/pip install customtkinter Pillow
-```
-
-Create `config.json` in the project root before first launch:
+1. Download `ModManager-<version>-linux.zip` from the [Releases](https://github.com/Bugiboop/LinuxNMModManager/releases) page and extract it
+2. Edit `config.json` and set `game_root` to your game installation path:
 
 ```json
 {
@@ -70,6 +63,28 @@ Create `config.json` in the project root before first launch:
 }
 ```
 
+3. Run `./ModManager`
+
+Game profiles are downloaded automatically from GitHub on first launch.
+
+### Running from source
+
+```bash
+git clone https://github.com/Bugiboop/LinuxNMModManager.git
+cd LinuxNMModManager
+
+# Create the virtual environment and install GUI dependencies
+python3 -m venv .venv
+.venv/bin/pip install customtkinter Pillow
+```
+
+Create `config.json` in the project root as shown above, then launch with:
+
+```bash
+.venv/bin/python sbmm_gui.py   # GUI
+python sbmm.py                 # CLI
+```
+
 ---
 
 ## Usage
@@ -77,7 +92,8 @@ Create `config.json` in the project root before first launch:
 ### GUI
 
 ```bash
-.venv/bin/python sbmm_gui.py
+./ModManager                    # pre-built executable
+.venv/bin/python sbmm_gui.py   # from source
 ```
 
 - The **game selector** dropdown (top-left of sidebar) switches between configured games; the **+** button adds a new one
@@ -95,22 +111,24 @@ Create `config.json` in the project root before first launch:
 
 ```bash
 # Drop archives into game_profiles/<game_id>/compressed/, then:
-python sbmm.py --install          # extract + enable everything
-python sbmm.py --extract          # extract only (choose variants interactively)
+./ModManager --install          # extract + enable everything
+./ModManager --extract          # extract only (choose variants interactively)
 
-python sbmm.py --enable  "ModName"
-python sbmm.py --disable "ModName"
-python sbmm.py --enable           # all mods
-python sbmm.py --disable          # all mods
+./ModManager --enable  "ModName"
+./ModManager --disable "ModName"
+./ModManager --enable           # all mods
+./ModManager --disable          # all mods
 
-python sbmm.py --list
-python sbmm.py --conflicts        # symlink-level conflict report
-python sbmm.py --assetcheck       # internal asset-level conflict report
-python sbmm.py --clean            # interactive conflict resolution
-python sbmm.py --check            # integrity check
-python sbmm.py --purge            # remove stale state entries
-python sbmm.py --uninstall        # remove all symlinks, restore backups
+./ModManager --list
+./ModManager --conflicts        # symlink-level conflict report
+./ModManager --assetcheck       # internal asset-level conflict report
+./ModManager --clean            # interactive conflict resolution
+./ModManager --check            # integrity check
+./ModManager --purge            # remove stale state entries
+./ModManager --uninstall        # remove all symlinks, restore backups
 ```
+
+When running from source, replace `./ModManager` with `python sbmm.py`.
 
 ---
 
@@ -229,11 +247,28 @@ The Nexus game is determined by the `nexus_slug` in the active game profile. API
 
 ## Directory Layout
 
+### Pre-built release
+
 ```
-ModManager/
+ModManager-<version>-linux/
+├── ModManager            # standalone executable (GUI + CLI)
+├── config.json           # your configuration (edit or use Settings / + button)
+└── game_profiles/        # populated automatically on first launch
+    └── <game_id>/
+        ├── <game_id>.json   # game profile (downloaded from GitHub)
+        ├── state.json        # auto-managed symlink/backup records
+        ├── .nexus_cache/     # cached Nexus API responses and cover art
+        ├── mods/             # extracted mod folders
+        └── compressed/       # downloaded mod archives
+```
+
+### Source tree
+
+```
+LinuxNMModManager/
 ├── sbmm.py               # CLI entry point
 ├── sbmm_gui.py           # GUI entry point
-├── config.json           # your configuration (edit or use Settings / + button)
+├── config.json           # your configuration
 ├── mm/                   # backend + GUI packages
 │   ├── commands.py  config.py  archive.py  resolver.py  …
 │   └── gui/
@@ -325,7 +360,7 @@ When a mod must replace a file that already exists in the game directory, the or
 
 ## Contributing
 
-Issues and pull requests are welcome. The core is a single-file CLI (`sbmm.py`) plus a single-file GUI frontend (`sbmm_gui.py`) with no runtime dependencies beyond the standard library (and `customtkinter` + `Pillow` for the GUI).
+Issues and pull requests are welcome. The backend lives in the `mm/` package (`commands.py`, `config.py`, `archive.py`, `resolver.py`, …) and the GUI in `mm/gui/`. Entry points are `sbmm.py` (CLI) and `sbmm_gui.py` (GUI). Runtime dependencies beyond the standard library are `customtkinter` and `Pillow` (GUI only).
 
 Before submitting a PR:
 - Test `--install`, `--disable`, `--enable`, and `--check` against a real mod setup

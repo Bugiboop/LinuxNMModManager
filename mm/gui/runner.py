@@ -11,6 +11,25 @@ from .constants import _CARD_NORMAL, _CARD_FOCUSED, _CARD_CHECKED
 from .dialogs import _detect_prompt, _InteractiveDialog
 
 
+def _build_cmd(script_dir, args: list) -> list:
+    """
+    Build the subprocess command list for running CLI operations.
+
+    - Frozen (PyInstaller): re-invoke the same executable with the CLI args;
+      sbmm_gui.py detects CLI flags and routes to mm.commands instead of
+      opening a second GUI window.
+    - Development: use .venv python + sbmm.py, falling back to sys.executable.
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable] + args
+
+    sbmm   = script_dir / "sbmm.py"
+    python = script_dir / ".venv" / "bin" / "python"
+    if not python.exists():
+        python = sys.executable
+    return [str(python), "-u", str(sbmm)] + args
+
+
 class RunnerMixin:
     """Mixin providing subprocess runner and mod selection for ModManagerApp."""
 
@@ -122,17 +141,13 @@ class RunnerMixin:
         if not names:
             return
         SCRIPT_DIR = _gc.SCRIPT_DIR
-        SBMM = SCRIPT_DIR / "sbmm.py"
-        python = SCRIPT_DIR / ".venv" / "bin" / "python"
-        if not python.exists():
-            python = sys.executable
 
         self._log_write(f"\n$ sbmm {flag} [{len(names)} mod(s)]\n", bold=True)
         self._busy.configure(text="⏳ Running…")
 
         def worker():
             for name in names:
-                cmd = [str(python), "-u", str(SBMM), flag, name]
+                cmd = _build_cmd(SCRIPT_DIR, [flag, name])
                 try:
                     proc = subprocess.Popen(
                         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -158,11 +173,7 @@ class RunnerMixin:
         The user's answer is written back to the process's stdin.
         """
         SCRIPT_DIR = _gc.SCRIPT_DIR
-        SBMM = SCRIPT_DIR / "sbmm.py"
-        python = SCRIPT_DIR / ".venv" / "bin" / "python"
-        if not python.exists():
-            python = sys.executable
-        cmd = [str(python), "-u", str(SBMM)] + args
+        cmd = _build_cmd(SCRIPT_DIR, args)
 
         self._log_write(f"\n$ sbmm {' '.join(args)}\n", bold=True)
         self._busy.configure(text="⏳ Running…")
@@ -286,11 +297,7 @@ class RunnerMixin:
 
     def _run_bg(self, args: list, stdin_data: str = None, on_done=None):
         SCRIPT_DIR = _gc.SCRIPT_DIR
-        SBMM = SCRIPT_DIR / "sbmm.py"
-        python = SCRIPT_DIR / ".venv" / "bin" / "python"
-        if not python.exists():
-            python = sys.executable
-        cmd = [str(python), "-u", str(SBMM)] + args
+        cmd = _build_cmd(SCRIPT_DIR, args)
 
         self._log_write(f"\n$ sbmm {' '.join(args)}\n", bold=True)
         self._busy.configure(text="⏳ Running…")
@@ -325,12 +332,8 @@ class RunnerMixin:
 
     def _open_terminal(self, args: list):
         SCRIPT_DIR = _gc.SCRIPT_DIR
-        SBMM = SCRIPT_DIR / "sbmm.py"
-        py = SCRIPT_DIR / ".venv" / "bin" / "python"
-        if not py.exists():
-            py = sys.executable
         cmd_str = (
-            f"{py} {SBMM} {' '.join(args)}; "
+            f"{' '.join(str(p) for p in _build_cmd(SCRIPT_DIR, args))}; "
             "echo; echo '--- Press Enter to close ---'; read"
         )
         for term in [
