@@ -44,15 +44,15 @@ sudo apt install p7zip-full   # Debian / Ubuntu
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/StellarBladeModManager.git
-cd StellarBladeModManager
+git clone https://github.com/Bugiboop/LinuxNMModManager.git
+cd LinuxNMMofManager
 
 # Create the virtual environment and install GUI dependencies
 python3 -m venv .venv
 .venv/bin/pip install customtkinter Pillow
 ```
 
-On first launch, `config.json` is auto-created (or auto-migrated from the old single-game format). You can also create it manually:
+On first launch, `config.json` is auto-created. You can also create it manually:
 
 ```json
 {
@@ -66,8 +66,6 @@ On first launch, `config.json` is auto-created (or auto-migrated from the old si
   "theme": "dark"
 }
 ```
-
-> **Upgrading from an older version?** The old `{ "game_root": "..." }` format is detected and migrated automatically — no manual changes needed.
 
 ---
 
