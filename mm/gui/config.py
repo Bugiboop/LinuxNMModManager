@@ -1,7 +1,11 @@
 import json
+import sys
 from pathlib import Path
 
-SCRIPT_DIR    = Path(__file__).parent.parent.parent.resolve()
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = Path(sys.executable).parent.resolve()
+else:
+    SCRIPT_DIR = Path(__file__).parent.parent.parent.resolve()
 CONFIG_FILE   = SCRIPT_DIR / "config.json"
 _PROFILES_DIR = SCRIPT_DIR / "game_profiles"
 

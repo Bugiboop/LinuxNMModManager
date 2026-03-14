@@ -26,3 +26,5 @@ config.json
 !game_profiles/*/compressed/Place Nexus Mods downloads here NO RENAME.txt
 !game_profiles/*/compressed-disabled/Script places unloadable (conflicts) mods here.txt
 !game_profiles/*/mods/The program will place extracted mods here.txt
+build/
+dist/

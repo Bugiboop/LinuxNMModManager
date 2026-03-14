@@ -3,7 +3,12 @@ import json
 import sys
 import os
 
-SCRIPT_DIR    = Path(__file__).parent.parent.resolve()
+# When running as a PyInstaller bundle, __file__ lives inside the extracted
+# archive; use the directory that contains the executable instead.
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = Path(sys.executable).parent.resolve()
+else:
+    SCRIPT_DIR = Path(__file__).parent.parent.resolve()
 CONFIG_FILE   = SCRIPT_DIR / "config.json"
 STATE_FILE    = SCRIPT_DIR / "state.json"   # may be overwritten by load_config()
 PROFILES_DIR  = SCRIPT_DIR / "game_profiles"
