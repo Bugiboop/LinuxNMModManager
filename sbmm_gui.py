@@ -427,6 +427,7 @@ class App(ctk.CTk):
         self._vlist_yoffs:        list     = []   # y pixel offset for each item
         self._vlist_total_h:      int      = 0    # total canvas scroll height
         self._vlist_widgets:      dict     = {}   # idx → {"frame": CTkFrame, "cid": int}
+        self._vlist_populated:    set      = set()# indices whose shells have been filled
         self._vlist_render_after: str|None = None # pending debounce id
 
         self._build_sidebar()
@@ -1701,6 +1702,7 @@ class App(ctk.CTk):
             except Exception:
                 pass
         self._vlist_widgets.clear()
+        self._vlist_populated.clear()
         self._switches.clear()
         self._cards.clear()
         self._checkboxvars.clear()
@@ -1768,8 +1770,9 @@ class App(ctk.CTk):
                         daemon=True,
                     ).start()
 
-        # Render visible cards (deferred slightly so canvas has its final size)
-        self.after(10, self._vlist_render)
+        # Phase 1: batch-create all outer card shells (deferred so window stays
+        # responsive). Visible shells are populated immediately in _vlist_render.
+        self.after(0, lambda: self._vlist_batch_shells(0))
 
         self._update_info_panel(self._focused)
 
@@ -1801,60 +1804,42 @@ class App(ctk.CTk):
                 self._vlist_canvas.itemconfigure(w_data["cid"], width=new_w)
         self._vlist_render()
 
-    def _vlist_render(self):
-        """Create card widgets only for rows visible in the canvas viewport."""
-        canvas   = self._vlist_canvas
-        canvas_h = canvas.winfo_height()
-        canvas_w = canvas.winfo_width()
-        if canvas_h < 10 or canvas_w < 10 or not self._vlist_items:
-            return
+    _SHELL_BATCH = 20  # outer shells to create per event-loop tick
 
-        y_top    = canvas.canvasy(0)
-        y_bot    = canvas.canvasy(canvas_h)
-        buf_px   = _V_BUF * (_CARD_H + _V_PAD)
-        vis_top  = y_top - buf_px
-        vis_bot  = y_bot + buf_px
+    def _vlist_batch_shells(self, start: int):
+        """Phase 1: create outer card shells in batches, keeping UI responsive."""
+        canvas  = self._vlist_canvas
+        canvas_w = max(canvas.winfo_width() - 4, 10)
+        items   = self._vlist_items
+        end     = min(start + self._SHELL_BATCH, len(items))
 
-        visible: set = set()
-        for i, yo in enumerate(self._vlist_yoffs):
-            h = _SEP_H if self._vlist_items[i]["type"] == "sep" else _CARD_H
-            if yo + h > vis_top and yo < vis_bot:
-                visible.add(i)
-
-        # Destroy off-screen widgets
-        to_remove = [i for i in list(self._vlist_widgets) if i not in visible]
-        for i in to_remove:
-            w_data = self._vlist_widgets.pop(i)
-            name   = self._vlist_items[i].get("name", "")
-            try:
-                w_data["frame"].destroy()
-            except Exception:
-                pass
-            self._cards.pop(name, None)
-            self._switches.pop(name, None)
-            self._checkboxvars.pop(name, None)
-            self._name_labels.pop(name, None)
-
-        # Create newly visible widgets
-        card_w = max(canvas_w - 4, 10)
-        for i in visible:
+        for i in range(start, end):
             if i in self._vlist_widgets:
                 continue
-            item  = self._vlist_items[i]
+            item  = items[i]
             yo    = self._vlist_yoffs[i]
-            frame = self._vlist_create_card(item)
-            cid   = canvas.create_window(2, yo, window=frame,
-                                         anchor="nw", width=card_w)
-            self._vlist_widgets[i] = {"frame": frame, "cid": cid}
+            shell = self._vlist_create_shell(item)
+            cid   = canvas.create_window(2, yo, window=shell,
+                                         anchor="nw", width=canvas_w)
+            self._vlist_widgets[i] = {"frame": shell, "cid": cid}
             if item["type"] in ("mod", "archive"):
-                self._cards[item["name"]] = frame
+                self._cards[item["name"]] = shell
+            if item["type"] == "sep":
+                self._vlist_populated.add(i)   # sep is complete at shell creation
 
-    def _vlist_create_card(self, item: dict) -> ctk.CTkFrame:
-        """Build and return a single card (or separator) frame for the canvas."""
+        # After the first batch, populate visible shells immediately so the
+        # user sees content while the rest of the shells are still being created.
+        if start == 0:
+            self._vlist_render()
+
+        if end < len(items):
+            self.after(0, lambda: self._vlist_batch_shells(end))
+
+    def _vlist_create_shell(self, item: dict) -> ctk.CTkFrame:
+        """Phase 1: create the outer card frame (border only, no internal widgets)."""
         itype = item["type"]
         name  = item["name"]
 
-        # ── Separator row ────────────────────────────────────────────
         if itype == "sep":
             f = ctk.CTkFrame(self._vlist_canvas, fg_color="transparent",
                              height=_SEP_H)
@@ -1866,22 +1851,8 @@ class App(ctk.CTk):
             self._bind_canvas_scroll(f)
             return f
 
-        # ── Mod / archive card ───────────────────────────────────────
-        if itype == "mod":
-            is_on    = item["is_on"]
-            symlinks = item["symlinks"]
-            exists   = item["exists"]
-            disp     = item["disp"]
-            checked  = name in self._selected
-            focused  = name == self._focused
-        else:  # archive
-            is_on    = False
-            symlinks = 0
-            exists   = False
-            disp     = item["disp"]
-            checked  = False
-            focused  = name == self._focused
-
+        checked = (name in self._selected) if itype == "mod" else False
+        focused = name == self._focused
         if checked:
             bg, bw = _CARD_CHECKED, 2
         elif focused:
@@ -1889,18 +1860,65 @@ class App(ctk.CTk):
         else:
             bg, bw = _CARD_NORMAL, 0
 
-        card = ctk.CTkFrame(
+        shell = ctk.CTkFrame(
             self._vlist_canvas, fg_color=bg, corner_radius=7,
             border_width=bw, border_color="#2980b9",
+            height=_CARD_H,
         )
-        card.grid_columnconfigure(2, weight=1)
+        shell.grid_propagate(False)
+        self._bind_canvas_scroll(shell)
+        return shell
+
+    def _vlist_render(self):
+        """Phase 2: populate shells that are visible but not yet filled."""
+        canvas   = self._vlist_canvas
+        canvas_h = canvas.winfo_height()
+        if canvas_h < 10 or not self._vlist_items:
+            return
+
+        y_top   = canvas.canvasy(0)
+        y_bot   = canvas.canvasy(canvas_h)
+        buf_px  = _V_BUF * (_CARD_H + _V_PAD)
+        vis_top = y_top - buf_px
+        vis_bot = y_bot + buf_px
+
+        for i, yo in enumerate(self._vlist_yoffs):
+            if i in self._vlist_populated:
+                continue
+            h = _SEP_H if self._vlist_items[i]["type"] == "sep" else _CARD_H
+            if yo + h > vis_top and yo < vis_bot:
+                if i in self._vlist_widgets:
+                    self._vlist_populate_card(i)
+
+    def _vlist_populate_card(self, idx: int):
+        """Phase 2: fill a shell frame with its internal widgets."""
+        item  = self._vlist_items[idx]
+        shell = self._vlist_widgets[idx]["frame"]
+        itype = item["type"]
+        name  = item["name"]
+
+        if itype == "mod":
+            is_on    = item["is_on"]
+            symlinks = item["symlinks"]
+            exists   = item["exists"]
+            disp     = item["disp"]
+            checked  = name in self._selected
+        else:  # archive
+            is_on    = False
+            symlinks = 0
+            exists   = False
+            disp     = item["disp"]
+            checked  = False
+
+        shell.grid_propagate(True)
+        shell.grid_columnconfigure(2, weight=1)
 
         # col 0 – checkbox (mod) or spacer (archive)
         if itype == "mod":
             cb_var = ctk.BooleanVar(value=checked)
             self._checkboxvars[name] = cb_var
             cb = ctk.CTkCheckBox(
-                card, text="", variable=cb_var,
+                shell, text="", variable=cb_var,
                 width=20, checkbox_width=15, checkbox_height=15,
                 command=lambda n=name, v=cb_var: self._on_checkbox_change(n, v),
             )
@@ -1908,7 +1926,7 @@ class App(ctk.CTk):
             if not exists:
                 cb.configure(state="disabled")
         else:
-            ctk.CTkLabel(card, text="", width=20).grid(
+            ctk.CTkLabel(shell, text="", width=20).grid(
                 row=0, column=0, padx=(8, 2))
 
         # col 1 – status dot
@@ -1918,14 +1936,14 @@ class App(ctk.CTk):
             dot_col = "#27ae60"
         else:
             dot_col = ("gray52", "gray40")
-        dot_lbl = ctk.CTkLabel(card, text="●", font=ctk.CTkFont(size=13),
+        dot_lbl = ctk.CTkLabel(shell, text="●", font=ctk.CTkFont(size=13),
                                text_color=dot_col, width=22)
         dot_lbl.grid(row=0, column=1, padx=(2, 4), pady=8)
 
         # col 2 – mod name
         name_col = ("gray52", "gray46") if (itype == "mod" and not exists) \
                    else ("gray10", "gray90")
-        name_lbl = ctk.CTkLabel(card, text=disp, font=ctk.CTkFont(size=12),
+        name_lbl = ctk.CTkLabel(shell, text=disp, font=ctk.CTkFont(size=12),
                                 text_color=name_col, anchor="w")
         name_lbl.grid(row=0, column=2, sticky="w", padx=4)
         self._name_labels[name] = name_lbl
@@ -1934,7 +1952,7 @@ class App(ctk.CTk):
         badge = None
         if itype == "mod" and is_on and symlinks:
             badge = ctk.CTkLabel(
-                card, text=str(symlinks),
+                shell, text=str(symlinks),
                 font=ctk.CTkFont(size=10),
                 text_color=("gray50", "gray48"),
                 fg_color=("gray70", "gray30"),
@@ -1943,7 +1961,7 @@ class App(ctk.CTk):
             badge.grid(row=0, column=3, padx=6)
         elif itype == "archive":
             badge = ctk.CTkLabel(
-                card, text="archive",
+                shell, text="archive",
                 font=ctk.CTkFont(size=10),
                 text_color=("#7a4a10", "#e09050"),
                 fg_color=("#f5dfc0", "#3a2a10"),
@@ -1951,13 +1969,13 @@ class App(ctk.CTk):
             )
             badge.grid(row=0, column=3, padx=6)
         else:
-            ctk.CTkLabel(card, text="", width=28).grid(row=0, column=3)
+            ctk.CTkLabel(shell, text="", width=28).grid(row=0, column=3)
 
         # col 4 – switch (mod) or spacer (archive)
         if itype == "mod":
             var = ctk.BooleanVar(value=is_on)
             sw  = ctk.CTkSwitch(
-                card, text="", variable=var, width=46,
+                shell, text="", variable=var, width=46,
                 onvalue=True, offvalue=False,
                 command=lambda n=name, v=var: self._toggle(n, v),
             )
@@ -1966,17 +1984,20 @@ class App(ctk.CTk):
                 sw.configure(state="disabled")
             self._switches[name] = (var, sw)
         else:
-            ctk.CTkLabel(card, text="", width=56).grid(row=0, column=4)
+            ctk.CTkLabel(shell, text="", width=56).grid(row=0, column=4)
 
         # Click-to-focus bindings
         if (itype == "mod" and exists) or itype == "archive":
-            click_widgets = [card, dot_lbl, name_lbl] + ([badge] if badge else [])
+            click_widgets = [shell, dot_lbl, name_lbl] + ([badge] if badge else [])
             for w in click_widgets:
                 w.bind("<Button-1>", lambda _, n=name: self._set_focus(n))
-            card.configure(cursor="hand2")
+            shell.configure(cursor="hand2")
 
-        self._bind_canvas_scroll(card)
-        return card
+        # Bind scroll on new children (shell itself was already bound at shell creation)
+        for child in shell.winfo_children():
+            self._bind_canvas_scroll(child)
+
+        self._vlist_populated.add(idx)
 
     def _bind_canvas_scroll(self, widget):
         """Recursively bind Linux scroll events on widget to scroll the virtual list."""
