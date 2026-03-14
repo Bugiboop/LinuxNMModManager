@@ -1,4 +1,4 @@
-# Universal Mod Manager
+# Linux NM Mod Manager
 
 > Symlink-based mod manager with a GUI and full CLI. Game-specific behaviour is defined by a small JSON **game profile**, making it easy to add support for any title.
 
