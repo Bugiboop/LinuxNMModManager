@@ -96,7 +96,7 @@ def load_config() -> dict:
         "game_root":      Path(game_cfg["game_root"]).expanduser().resolve(),
         "mods_dir":       (data_dir / game_cfg.get("mods_dir", "mods")).resolve(),
         "compressed_dir": (data_dir / game_cfg.get("compressed_dir", "compressed")).resolve(),
-        "nexus_api_key":  game_cfg.get("nexus_api_key", ""),
+        "nexus_api_key":  raw.get("nexus_api_key", game_cfg.get("nexus_api_key", "")),
         "profile":        profile,
         "data_dir":       data_dir,
     }

@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import shutil
 import argparse
 
 from .config import load_config, load_state, save_state, scan_game_tree
@@ -14,7 +15,8 @@ from .resolver import resolve_target, iter_mod_files, build_target_map
 # ---------------------------------------------------------------------------
 
 def cmd_extract(args, cfg, state):
-    extract_archives(cfg, force=args.force)
+    archive_name = None if args.extract is True else args.extract
+    extract_archives(cfg, force=args.force, archive_name=archive_name)
 
 
 def cmd_install(args, cfg, state):
@@ -52,17 +54,44 @@ def cmd_disable(args, cfg, state):
     else:
         for name in list(state["mods"].keys()):
             disable_mod(name, cfg, state)
-        state.pop("conflict_resolutions", None)
-        save_state(state)
+
+
+def _uninstall_mod(mod_name: str, cfg: dict, state: dict):
+    """Disable, delete extracted folder, and purge all state for a single mod."""
+    mods_dir: Path = cfg["mods_dir"]
+    print(f"[uninstall] {mod_name}")
+
+    if state["mods"].get(mod_name, {}).get("enabled"):
+        disable_mod(mod_name, cfg, state)
+
+    mod_dir = mods_dir / mod_name
+    if mod_dir.exists():
+        shutil.rmtree(mod_dir)
+        print(f"  [deleted]  {mod_dir.name}/")
+
+    if mod_name in state["mods"]:
+        del state["mods"][mod_name]
+        print(f"  [purged]   State record cleared")
+
+    ignored = state.get("clean_ignored_pairs", [])
+    before = len(ignored)
+    state["clean_ignored_pairs"] = [p for p in ignored if mod_name not in p]
+    if before - len(state["clean_ignored_pairs"]):
+        print(f"  [cleared]  Conflict resolution choices forgotten")
+
+    save_state(state)
+    print(f"[done] {mod_name} uninstalled — re-extract from compressed/ to reinstall")
 
 
 def cmd_uninstall(args, cfg, state):
-    print("[uninstall] Removing all symlinks and restoring backups...")
-    for name in list(state["mods"].keys()):
-        disable_mod(name, cfg, state)
-    state.pop("conflict_resolutions", None)
-    save_state(state)
-    print("[done] Uninstall complete. Conflict choices have been cleared.")
+    mod_name = None if args.uninstall is True else args.uninstall
+    if mod_name:
+        _uninstall_mod(mod_name, cfg, state)
+    else:
+        print("[uninstall] Removing all symlinks and restoring backups...")
+        for name in list(state["mods"].keys()):
+            disable_mod(name, cfg, state)
+        print("[done] Uninstall complete.")
 
 
 def cmd_conflicts(args, cfg, state):
@@ -213,6 +242,34 @@ def cmd_check(args, cfg, state):
             print(f"  {o}")
         issues += len(orphans)
 
+    # --- Conflict check ---
+    print()
+    print("── CONFLICT CHECK " + "─" * 52)
+    target_map = build_target_map(state)
+    conflicts: dict = {}  # {target_str: [mod_name, ...]}
+    for target_str, owner in target_map.items():
+        conflicts.setdefault(target_str, [])
+    # Rebuild from scratch to catch all owners
+    conflict_targets: dict = {}
+    for mod_name, mod_state in state.get("mods", {}).items():
+        if not mod_state.get("enabled"):
+            continue
+        for entry in mod_state.get("symlinks", []):
+            conflict_targets.setdefault(entry["link"], []).append(mod_name)
+    conflict_found = False
+    for target_str, owners in sorted(conflict_targets.items()):
+        if len(owners) > 1:
+            try:
+                rel = Path(target_str).relative_to(cfg["game_root"])
+            except ValueError:
+                rel = target_str
+            print(f"  [conflict]  {rel}")
+            for o in owners:
+                print(f"      claimed by: {o}")
+            conflict_found = True
+    if not conflict_found:
+        print("  No symlink conflicts.")
+
     # --- Summary ---
     print()
     if issues == 0:
@@ -358,11 +415,6 @@ def cmd_purge(args, cfg, state):
     for name in stale:
         del state["mods"][name]
 
-    # Clean conflict_resolutions keys that reference removed mods
-    resolutions = state.get("conflict_resolutions", {})
-    for key in [k for k in resolutions if any(m in k for m in stale_set)]:
-        del resolutions[key]
-
     # Clean clean_ignored_pairs entries that reference removed mods
     ignored = state.get("clean_ignored_pairs", [])
     state["clean_ignored_pairs"] = [p for p in ignored if not any(m in p for m in stale_set)]
@@ -466,8 +518,8 @@ def main():
         help="Extract archives from compressed/ and enable all mods",
     )
     group.add_argument(
-        "--extract", action="store_true",
-        help="Extract archives from compressed/ into mods/ without enabling",
+        "--extract", nargs="?", const=True, metavar="ARCHIVE",
+        help="Extract archives from compressed/ (omit name to extract all)",
     )
     group.add_argument(
         "--enable", nargs="?", const=True, metavar="MOD",
@@ -478,8 +530,8 @@ def main():
         help="Disable a mod by folder name (omit name to disable all)",
     )
     group.add_argument(
-        "--uninstall", action="store_true",
-        help="Remove all symlinks and restore .bak files",
+        "--uninstall", nargs="?", const=True, metavar="MOD",
+        help="Uninstall a mod (disable + delete folder + purge state), or all mods if no name given",
     )
     group.add_argument(
         "--list", action="store_true",
@@ -518,13 +570,13 @@ def main():
 
     if args.install:
         cmd_install(args, cfg, state)
-    elif args.extract:
+    elif args.extract is not None:
         cmd_extract(args, cfg, state)
     elif args.enable is not None:
         cmd_enable(args, cfg, state)
     elif args.disable is not None:
         cmd_disable(args, cfg, state)
-    elif args.uninstall:
+    elif args.uninstall is not None:
         cmd_uninstall(args, cfg, state)
     elif args.list:
         cmd_list(args, cfg, state)

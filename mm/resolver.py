@@ -28,7 +28,9 @@ def resolve_target(mod_root: Path, file_path: Path, game_root: Path,
             # bare_returns_none: skip if nothing follows the anchor (e.g. ~mods dir itself)
             if rule.get("bare_returns_none") and idx == len(parts) - 1:
                 return None
-            tail   = Path(*parts[idx:])
+            # anchor_offset: start the tail N steps before the anchor (preserves parent folders)
+            start  = max(0, idx - rule.get("anchor_offset", 0))
+            tail   = Path(*parts[start:])
             prefix = rule.get("prefix", "")
             return (game_root / prefix / tail) if prefix else (game_root / tail)
 

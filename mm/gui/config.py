@@ -85,7 +85,7 @@ def _load_config() -> dict:
         "game_id":        current_game,
         "mods_dir":       (data_dir / game_cfg.get("mods_dir", "mods")).resolve(),
         "compressed_dir": (data_dir / game_cfg.get("compressed_dir", "compressed")).resolve(),
-        "nexus_api_key":  game_cfg.get("nexus_api_key", "").strip(),
+        "nexus_api_key":  raw.get("nexus_api_key", game_cfg.get("nexus_api_key", "")).strip(),
         "data_dir":       data_dir,
     }
 

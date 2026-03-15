@@ -3,13 +3,29 @@ import os
 
 
 def _find_ue4ss_mod_names(mod_dir: Path) -> list:
-    """Return the UE4SS mod folder names found under any ue4ss/Mods/ subtree."""
+    """
+    Return the UE4SS mod folder names to register in mods.txt.
+
+    Detects two layouts:
+    - Structured: any ue4ss/Mods/<Name>/ subtree (e.g. mods shipped with the full Pal/ tree)
+    - Bare: direct subdirectories of mod_dir that contain a Scripts/ folder
+      (e.g. mods that ship as just <ModName>/Scripts/main.lua with no prefix)
+    """
     names = []
+
+    # Structured layout: ue4ss/Mods/<Name>/
     for root, dirs, _files in os.walk(mod_dir):
         root_path = Path(root)
         if root_path.name.lower() == "mods" and root_path.parent.name.lower() == "ue4ss":
             names.extend(dirs)
-            break  # only the first ue4ss/Mods/ matters
+            break
+
+    # Bare layout: mod_dir/<Name>/Scripts/
+    if not names:
+        for d in mod_dir.iterdir():
+            if d.is_dir() and (d / "Scripts").is_dir():
+                names.append(d.name)
+
     return names
 
 

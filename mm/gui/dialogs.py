@@ -13,7 +13,7 @@ def _detect_prompt(buf: str):
     m = re.search(r"Keep which\? \[1-(\d+)/a=keep all/s=skip\]:\s*$", b)
     if m:
         return ("variant", int(m.group(1)))
-    if re.search(r"Which should take priority\? \[1/2\]:\s*$", b):
+    if re.search(r"Resolve conflict \[1/2/s\]:\s*$", b):
         return ("conflict", 2)
     if re.search(r"Keep which\? \[1/2/s=skip once/a=always keep both\]:\s*$", b):
         return ("asset", 2)
@@ -108,6 +108,8 @@ class _InteractiveDialog(ctk.CTkToplevel):
             if kind == "variant":
                 choices.append(("a", "(a)  Keep all variants"))
                 choices.append(("s", "(s)  Skip (keep all, no removal)"))
+            elif kind == "conflict":
+                choices.append(("s", "(s)  Skip conflicting files — install the rest normally"))
             elif kind == "asset":
                 choices.append(("s", "(s)  Skip once  (keep both this time)"))
                 choices.append(("a", "(a)  Always keep both  (never ask again)"))

@@ -13,7 +13,7 @@ _nexus_id_cache: dict = {}
 def _nexus_id(folder: str):
     """Extract the Nexus mod ID from a folder name like 'ModName-1234-1-0-...'"""
     if folder not in _nexus_id_cache:
-        m = re.search(r"-(\d{3,6})(?:-[A-Za-z]?\d+)+-\d{9,}$", folder)
+        m = re.search(r"-(\d{1,7})(?:-[A-Za-z0-9]*)+-\d{9,}$", folder)
         _nexus_id_cache[folder] = m.group(1) if m else None
     return _nexus_id_cache[folder]
 

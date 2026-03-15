@@ -332,7 +332,7 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, ctk.CTk):
                      font=ctk.CTkFont(size=12),
                      ).grid(row=0, column=0, sticky="w", pady=4)
 
-        api_var   = ctk.StringVar(value=game_section.get("nexus_api_key", ""))
+        api_var   = ctk.StringVar(value=raw.get("nexus_api_key", game_section.get("nexus_api_key", "")))
         api_entry = ctk.CTkEntry(api_frame, textvariable=api_var, show="•",
                                  placeholder_text="Paste your Nexus Mods API key here")
         api_entry.grid(row=0, column=1, sticky="ew", padx=(0, 6))
@@ -498,11 +498,11 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, ctk.CTk):
         def _save():
             new_raw = dict(raw)
             new_raw["theme"] = theme_var.get()
+            new_raw["nexus_api_key"] = api_var.get().strip()
             new_raw.setdefault("games", {})[current_game] = {
                 "game_root":      path_vars["game_root"].get().strip(),
                 "mods_dir":       path_vars["mods_dir"].get().strip(),
                 "compressed_dir": path_vars["compressed_dir"].get().strip(),
-                "nexus_api_key":  api_var.get().strip(),
             }
             try:
                 CONFIG_FILE.write_text(json.dumps(new_raw, indent=2))

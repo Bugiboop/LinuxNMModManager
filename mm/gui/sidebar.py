@@ -6,6 +6,7 @@ from .constants import (
     _CARD_H, _SEP_H, _V_PAD, _V_BUF,
     _CARD_NORMAL, _CARD_FOCUSED, _CARD_CHECKED,
 )
+from .tooltip import attach_tooltip
 
 
 class SidebarMixin:
@@ -34,24 +35,37 @@ class SidebarMixin:
         )
         self._game_menu.grid(row=0, column=0, sticky="w")
 
-        ctk.CTkButton(
+        _add_btn = ctk.CTkButton(
             hdr, text="+", width=24, height=24,
             fg_color="transparent", hover_color=("gray70", "gray30"),
             font=ctk.CTkFont(size=14),
             command=self._add_game_dialog,
-        ).grid(row=0, column=1, padx=(4, 0))
+        )
+        _add_btn.grid(row=0, column=1, padx=(4, 0))
+        attach_tooltip(_add_btn, "Add a new game")
 
         self._count_label = ctk.CTkLabel(hdr, text="",
                                          font=ctk.CTkFont(size=11),
                                          text_color=("gray45", "gray55"))
         self._count_label.grid(row=0, column=2, sticky="e", padx=(8, 0))
 
-        ctk.CTkButton(
+        _settings_btn = ctk.CTkButton(
             hdr, text="⚙", width=28, height=22,
             fg_color="transparent", hover_color=("gray70", "gray30"),
             font=ctk.CTkFont(size=14),
             command=self._open_settings,
-        ).grid(row=0, column=3, sticky="e", padx=(4, 0))
+        )
+        _settings_btn.grid(row=0, column=3, sticky="e", padx=(4, 0))
+        attach_tooltip(_settings_btn, "Open settings")
+
+        _check_btn = ctk.CTkButton(
+            hdr, text="Check", width=52, height=22,
+            fg_color="transparent", border_width=1,
+            font=ctk.CTkFont(size=11),
+            command=lambda: self._run_bg(["--check"], on_done=self.refresh_mods),
+        )
+        _check_btn.grid(row=0, column=4, sticky="e", padx=(4, 0))
+        attach_tooltip(_check_btn, "Verify all symlinks are intact and check for conflicts")
 
         # Sort control
         sort_bar = ctk.CTkFrame(sb, fg_color="transparent")
@@ -92,16 +106,20 @@ class SidebarMixin:
         btns.grid(row=3, column=0, sticky="ew", padx=12, pady=12)
         btns.grid_columnconfigure((0, 1), weight=1)
 
-        ctk.CTkButton(
+        _ena_all = ctk.CTkButton(
             btns, text="Enable All", height=34,
             command=lambda: self._run_interactive(["--enable"], on_done=self.refresh_mods),
-        ).grid(row=0, column=0, padx=(0, 4), sticky="ew")
+        )
+        _ena_all.grid(row=0, column=0, padx=(0, 4), sticky="ew")
+        attach_tooltip(_ena_all, "Enable every mod in the list")
 
-        ctk.CTkButton(
+        _dis_all = ctk.CTkButton(
             btns, text="Disable All", height=34,
             fg_color=("gray72", "gray30"), hover_color=("gray62", "gray38"),
             command=lambda: self._run_bg(["--disable"], on_done=self.refresh_mods),
-        ).grid(row=0, column=1, padx=(4, 0), sticky="ew")
+        )
+        _dis_all.grid(row=0, column=1, padx=(4, 0), sticky="ew")
+        attach_tooltip(_dis_all, "Disable every currently enabled mod")
 
         self._btn_enable_sel = ctk.CTkButton(
             btns, text="Enable Selected", height=34, state="disabled",
@@ -109,6 +127,7 @@ class SidebarMixin:
             command=self._enable_selected,
         )
         self._btn_enable_sel.grid(row=1, column=0, padx=(0, 4), pady=(6, 0), sticky="ew")
+        attach_tooltip(self._btn_enable_sel, "Enable all checked mods")
 
         self._btn_disable_sel = ctk.CTkButton(
             btns, text="Disable Selected", height=34, state="disabled",
@@ -116,6 +135,7 @@ class SidebarMixin:
             command=self._disable_selected,
         )
         self._btn_disable_sel.grid(row=1, column=1, padx=(4, 0), pady=(6, 0), sticky="ew")
+        attach_tooltip(self._btn_disable_sel, "Disable all checked mods")
 
         util = ctk.CTkFrame(btns, fg_color="transparent")
         util.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
@@ -128,13 +148,16 @@ class SidebarMixin:
             command=self._clear_selection,
         )
         self._btn_clear_sel.grid(row=0, column=0, padx=(0, 3), sticky="ew")
+        attach_tooltip(self._btn_clear_sel, "Clear all checkbox selections")
 
-        ctk.CTkButton(
+        _refresh_btn = ctk.CTkButton(
             util, text="↺  Refresh", height=28,
             fg_color="transparent", border_width=1,
             font=ctk.CTkFont(size=12),
             command=self.refresh_mods,
-        ).grid(row=0, column=1, padx=(3, 0), sticky="ew")
+        )
+        _refresh_btn.grid(row=0, column=1, padx=(3, 0), sticky="ew")
+        attach_tooltip(_refresh_btn, "Reload mod list and state from disk")
 
     # ── Virtual list helpers ───────────────────────────────────────────
 

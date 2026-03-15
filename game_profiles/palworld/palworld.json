@@ -1,0 +1,28 @@
+{
+  "id": "palworld",
+  "name": "Palworld",
+  "nexus_slug": "palworld",
+  "pak_extensions": [".pak", ".ucas", ".utoc", ".sig"],
+  "asset_extensions": [".uasset", ".ubulk", ".uexp", ".umap"],
+  "utoc_strip_prefixes": ["../../../", "Pal/Content/"],
+  "ignored_filenames": ["modinfo.ini", "1.png", "mods.txt", "README.txt", "readme.txt"],
+  "install_rules": [
+    {"anchor": "Pal",       "prefix": "",                   "case_insensitive": false},
+    {"anchor": "Binaries",  "prefix": "Pal",                "case_insensitive": false},
+    {"anchor": "Win64",     "prefix": "Pal/Binaries",       "case_insensitive": false},
+    {"anchor": "ue4ss",     "prefix": "Pal/Binaries/Win64", "case_insensitive": true},
+    {"anchor": "Mods",        "prefix": "Pal/Binaries/Win64", "case_insensitive": false},
+    {"anchor": "Scripts",    "prefix": "Pal/Binaries/Win64/Mods", "anchor_offset": 1, "case_insensitive": false},
+    {"anchor": "enabled.txt","prefix": "Pal/Binaries/Win64/Mods", "anchor_offset": 1, "case_insensitive": false},
+    {"anchor": "Content",    "prefix": "Pal",                "case_insensitive": false},
+    {"anchor": "LogicMods", "prefix": "Pal/Content/Paks",   "case_insensitive": true},
+    {"anchor": "~mods",     "prefix": "Pal/Content/Paks",   "case_insensitive": true, "bare_returns_none": true}
+  ],
+  "default_install_path": "Pal/Content/Paks/~mods",
+  "special_extension_paths": {
+    ".dll": "Pal/Binaries/Win64"
+  },
+  "ue4ss": {
+    "mods_txt_rel_path": "Pal/Binaries/Win64/ue4ss/Mods/mods.txt"
+  }
+}

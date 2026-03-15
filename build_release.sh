@@ -41,10 +41,10 @@ echo "[skip]  game_profiles/ — profiles are fetched from GitHub at runtime"
 cat > "${RELEASE_DIR}/config.json" << 'JSON'
 {
   "current_game": "stellar_blade",
+  "nexus_api_key": "",
   "games": {
     "stellar_blade": {
-      "game_root": "",
-      "nexus_api_key": ""
+      "game_root": ""
     }
   },
   "theme": "dark"

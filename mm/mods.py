@@ -8,32 +8,31 @@ from .resolver import resolve_target, iter_mod_files, build_target_map
 from .ue4ss import _find_ue4ss_mod_names, _register_ue4ss_mods, _unregister_ue4ss_mods
 
 
-def conflict_key(mod_a: str, mod_b: str) -> str:
-    """Stable, order-independent key for a pair of mod names."""
-    return " vs ".join(sorted([mod_a, mod_b]))
-
-
-def prompt_conflict_resolution(mod_name: str, other_mod: str, conflicting_targets: list) -> str:
-    """Interactively ask the user which mod should win. Returns the winning mod name."""
-    sample = [Path(t).name for t in conflicting_targets[:5]]
-    extra = len(conflicting_targets) - 5
+def _prompt_conflict(mod_name: str, other_mod: str, claimed: list) -> str:
+    """
+    Ask the user how to handle a conflict between two mods.
+    Returns: 's' = skip conflicting files, '1' = disable other mod, '2' = skip this mod.
+    """
+    sample    = [Path(t).name for t in claimed[:3]]
+    extra     = len(claimed) - 3
     file_list = ", ".join(sample) + (f"  (+{extra} more)" if extra > 0 else "")
     print()
-    print(f"  [conflict] Two mods claim the same file(s): {file_list}")
-    print(f"    (1) {other_mod}  (already enabled)")
-    print(f"    (2) {mod_name}  (being enabled now)")
+    print(f"  [conflict] '{other_mod}' owns {len(claimed)} file(s) also claimed by '{mod_name}':")
+    print(f"    {file_list}")
+    print(f"    (1) Disable '{other_mod}' — '{mod_name}' takes over all its files")
+    print(f"    (2) Skip '{mod_name}' entirely — keep '{other_mod}' as-is")
+    print(f"    (s) Skip conflicting files — install the rest of '{mod_name}' normally")
     while True:
         try:
-            choice = input("  Which should take priority? [1/2]: ").strip()
+            choice = input("  Resolve conflict [1/2/s]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
-            print("[abort] No choice made — skipping mod.")
-            return other_mod  # default: keep what's already enabled
-        if choice == "1":
-            return other_mod
-        if choice == "2":
-            return mod_name
-        print("  Please enter 1 or 2.")
+            return "s"
+        if choice in ("1", "2"):
+            return choice
+        if choice in ("s", ""):
+            return "s"
+        print("  Please enter 1, 2, or s.")
 
 
 def enable_mod(mod_name: str, cfg: dict, state: dict, target_map: dict = None, game_tree: set = None):
@@ -66,44 +65,46 @@ def enable_mod(mod_name: str, cfg: dict, state: dict, target_map: dict = None, g
         game_tree = scan_game_tree(cfg["game_root"])
 
     game_root: Path = cfg["game_root"]
-    resolutions: dict = state.setdefault("conflict_resolutions", {})
-
-    # --- Phase 1: pre-scan to find inter-mod conflicts ---
     profile = cfg.get("profile", {})
-    conflicts_with: dict = {}  # {other_mod_name: [target_str, ...]}
+
+    # --- Pre-scan: group conflicts by owning mod, then prompt once per owner ---
+    conflicts_with: dict = {}  # {other_mod: [target_str, ...]}
     for src_file in iter_mod_files(mod_dir):
         target = resolve_target(mod_dir, src_file, game_root, profile, game_tree)
+        if target is None:
+            continue
         owner = target_map.get(str(target))
         if owner and owner != mod_name:
             conflicts_with.setdefault(owner, []).append(str(target))
 
-    # --- Phase 2: resolve each conflict (prompt or recall stored choice) ---
+    skip_targets: set = set()  # targets to skip during placement
+
     for other_mod, claimed in conflicts_with.items():
-        key = conflict_key(mod_name, other_mod)
-        if key in resolutions:
-            winner = resolutions[key]
-            print(f"  [conflict] {mod_name} vs {other_mod}  —  {winner} wins (stored choice)")
-        else:
-            winner = prompt_conflict_resolution(mod_name, other_mod, claimed)
-            resolutions[key] = winner
-            save_state(state)
-
-        if winner != mod_name:
-            print(f"[skip]   {mod_name}  —  loses to '{other_mod}' (skipping entirely)")
+        choice = _prompt_conflict(mod_name, other_mod, claimed)
+        if choice == "2":
+            print(f"[skip] '{mod_name}' — keeping '{other_mod}' as-is")
             return
+        if choice == "1":
+            print(f"  [conflict] Disabling '{other_mod}' — '{mod_name}' takes over")
+            disable_mod(other_mod, cfg, state)
+            target_map.clear()
+            target_map.update(build_target_map(state))
+        else:  # "s"
+            skip_targets.update(claimed)
 
-        # This mod wins: disable the losing mod first, then rebuild the map
-        print(f"  [conflict] {mod_name} wins over '{other_mod}'  —  disabling {other_mod}")
-        disable_mod(other_mod, cfg, state)
-        target_map.clear()
-        target_map.update(build_target_map(state))
-
-    # --- Phase 3: enable ---
     symlinks = []
     backups = []
+    skipped = 0
 
     for src_file in iter_mod_files(mod_dir):
         target = resolve_target(mod_dir, src_file, game_root, profile, game_tree)
+        if target is None:
+            continue
+
+        if str(target) in skip_targets:
+            print(f"  [conflict] {src_file.name}  ←  skipping (conflict)")
+            skipped += 1
+            continue
 
         target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -134,6 +135,8 @@ def enable_mod(mod_name: str, cfg: dict, state: dict, target_map: dict = None, g
     save_state(state)
 
     parts = [f"{len(symlinks)} linked"]
+    if skipped:
+        parts.append(f"{skipped} file(s) skipped (conflict)")
     if added:
         parts.append(f"{len(added)} ue4ss registered")
     if backups:

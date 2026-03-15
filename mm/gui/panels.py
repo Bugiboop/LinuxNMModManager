@@ -19,6 +19,7 @@ from mm.gui.config import CONFIG_FILE
 from .constants import _BG, _INACTIVE, _HOVER
 from .info import _read_mod_info, _utoc_assets
 from .nexus import _nexus_id, _display_name, _strip_html
+from .tooltip import attach_tooltip
 
 
 class PanelsMixin:
@@ -70,6 +71,7 @@ class PanelsMixin:
             font=ctk.CTkFont(size=11),
             command=self._open_mod_folder,
         )
+        attach_tooltip(self._folder_btn, "Open this mod's folder in the file manager")
         # Shown only when the mod folder exists on disk
         self._folder_path = None
 
@@ -79,6 +81,7 @@ class PanelsMixin:
             font=ctk.CTkFont(size=11),
             command=self._open_nexus,
         )
+        attach_tooltip(self._nexus_btn, "Open this mod's Nexus Mods page in the browser")
         # Shown only when a Nexus ID is known
         self._nexus_id = None
 
@@ -310,8 +313,7 @@ class PanelsMixin:
                            fg_color=("gray75", "gray28"))
         sep.grid(row=1, column=0, sticky="ew", padx=8, pady=(10, 6))
         ctk.CTkLabel(self._info_scroll,
-                     text="Click  Extract  below to unpack this archive into mods/,\n"
-                          "or  Install  to extract and enable all mods at once.",
+                     text="Click  Extract  in the action bar below to unpack this archive.",
                      font=ctk.CTkFont(size=12),
                      text_color=("gray40", "gray60"),
                      justify="left",
@@ -341,6 +343,7 @@ class PanelsMixin:
 
     def _update_info_panel(self, name):
         """Populate the info panel for the given mod folder name (or None)."""
+        self._update_action_buttons()
         self._cancel_img_overlay()
         for w in self._info_scroll.winfo_children():
             w.destroy()
@@ -713,12 +716,14 @@ class PanelsMixin:
                      text_color=("gray45", "gray55"),
                      ).grid(row=0, column=0, sticky="w")
 
-        ctk.CTkButton(
+        _clear_btn = ctk.CTkButton(
             log_hdr, text="Clear", width=64, height=24,
             fg_color="transparent", border_width=1,
             font=ctk.CTkFont(size=11),
             command=self._clear_log,
-        ).grid(row=0, column=1, sticky="e")
+        )
+        _clear_btn.grid(row=0, column=1, sticky="e")
+        attach_tooltip(_clear_btn, "Clear the output log")
 
         self._log = ctk.CTkTextbox(
             outer,
@@ -728,52 +733,104 @@ class PanelsMixin:
         )
         self._log.grid(row=1, column=0, sticky="nsew", padx=16, pady=(0, 0))
 
-        # Action buttons
+        # Action buttons — per focused mod
         act = ctk.CTkFrame(outer, fg_color="transparent")
         act.grid(row=2, column=0, sticky="ew", padx=16, pady=(6, 12))
+        act.grid_columnconfigure(0, weight=1)
+        act.grid_columnconfigure(1, weight=1)
 
-        actions = [
-            ("Install",    ["--install"],    "interactive"),
-            ("Extract",    ["--extract"],    "interactive"),
-            ("Check",      ["--check"],      "bg"),
-            ("AssetCheck", ["--assetcheck"], "interactive"),
-            ("Conflicts",  ["--conflicts"],  "bg"),
-            ("Clean",      ["--clean"],      "terminal"),
-            ("Purge",      ["--purge"],      "purge"),
-            ("Uninstall",  ["--uninstall"],  "uninstall"),
-        ]
+        self._btn_mod_action = ctk.CTkButton(
+            act, text="Enable", height=32,
+            font=ctk.CTkFont(size=12),
+            state="disabled",
+            fg_color=("gray72", "gray30"),
+            command=self._mod_action,
+        )
+        self._btn_mod_action.grid(row=0, column=0, padx=(0, 4), sticky="ew")
+        self._tt_mod_action = attach_tooltip(
+            self._btn_mod_action,
+            "Enable or disable the focused mod, or extract it if it is an archive",
+        )
 
-        cols = 4
-        for col in range(cols):
-            act.grid_columnconfigure(col, weight=1)
-
-        for i, (label, cmd_args, kind) in enumerate(actions):
-            row_i = i // cols
-            col_i = i % cols
-
-            if kind == "uninstall":
-                fg, hv = "#c0392b", "#922b21"
-            elif kind == "terminal":
-                fg = ("gray68", "gray32")
-                hv = ("gray58", "gray42")
-            else:
-                fg, hv = None, None
-
-            kw = dict(
-                text=label, height=32,
-                font=ctk.CTkFont(size=12),
-                command=lambda a=cmd_args, k=kind: self._dispatch(a, k),
-            )
-            if fg:
-                kw["fg_color"] = fg
-            if hv:
-                kw["hover_color"] = hv
-
-            ctk.CTkButton(act, **kw).grid(
-                row=row_i, column=col_i, padx=3, pady=(0, 3), sticky="ew"
-            )
+        self._btn_uninstall = ctk.CTkButton(
+            act, text="Uninstall", height=32,
+            font=ctk.CTkFont(size=12),
+            state="disabled",
+            fg_color="#c0392b", hover_color="#922b21",
+            command=self._uninstall_focused,
+        )
+        self._btn_uninstall.grid(row=0, column=1, padx=(4, 0), sticky="ew")
+        attach_tooltip(
+            self._btn_uninstall,
+            "Disable this mod, delete its folder, and clear its saved state",
+        )
 
         return outer
+
+    def _update_action_buttons(self):
+        """Update the Enable/Extract/Disable and Uninstall buttons for the focused mod."""
+        name = self._focused
+        if not name:
+            self._btn_mod_action.configure(
+                state="disabled", text="Enable",
+                fg_color=("gray72", "gray30"), hover_color=("gray62", "gray38"),
+            )
+            self._btn_uninstall.configure(state="disabled")
+            return
+
+        if name in self._archived:
+            self._btn_mod_action.configure(
+                state="normal", text="Extract",
+                fg_color=("#c07010", "#8a4e08"), hover_color=("#a06008", "#6a3a04"),
+            )
+            self._tt_mod_action.update("Extract this archive into the mods folder")
+            self._btn_uninstall.configure(state="disabled")
+        else:
+            ms = self._state["mods"].get(name, {})
+            if ms.get("enabled"):
+                self._btn_mod_action.configure(
+                    state="normal", text="Disable",
+                    fg_color=("gray52", "gray38"), hover_color=("gray42", "gray46"),
+                )
+                self._tt_mod_action.update("Disable this mod (removes its symlinks)")
+            else:
+                self._btn_mod_action.configure(
+                    state="normal", text="Enable",
+                    fg_color=("#1a5a9a", "#1a5a9a"), hover_color=("#1a6aaa", "#1a6aaa"),
+                )
+                self._tt_mod_action.update("Enable this mod (creates symlinks into the game folder)")
+            self._btn_uninstall.configure(state="normal")
+
+    def _mod_action(self):
+        """Enable, disable, or extract the focused mod depending on its current state."""
+        name = self._focused
+        if not name:
+            return
+        if name in self._archived:
+            self._run_interactive(["--extract", name], on_done=self.refresh_mods)
+        else:
+            ms = self._state["mods"].get(name, {})
+            if ms.get("enabled"):
+                self._run_bg(["--disable", name], on_done=self.refresh_mods)
+            else:
+                self._run_interactive(["--enable", name], on_done=self.refresh_mods)
+
+    def _uninstall_focused(self):
+        """Disable, delete folder, and purge state for the focused mod."""
+        name = self._focused
+        if not name or name in self._archived:
+            return
+        disp = self._get_disp_name(name)
+        dlg = ctk.CTkInputDialog(
+            text=f"Type  yes  to fully uninstall '{disp}':\n"
+                 "This disables it, deletes its folder, and clears its state.\n"
+                 "You will need to re-extract it from the archive to use it again.",
+            title="Confirm Uninstall",
+        )
+        if dlg.get_input() != "yes":
+            self._log_write("[cancelled]\n")
+            return
+        self._run_bg(["--uninstall", name], on_done=self.refresh_mods)
 
     # ── Status bar ────────────────────────────────────────────────────
 

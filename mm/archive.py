@@ -89,7 +89,7 @@ def prompt_variant_choice(parent: Path, variants: list) -> Path:
         print(f"  Enter a number 1-{len(variants)}, 'a' to keep all, or 's' to skip.")
 
 
-def extract_archives(cfg: dict, force: bool = False):
+def extract_archives(cfg: dict, force: bool = False, archive_name: str = None):
     compressed_dir: Path = cfg["compressed_dir"]
     mods_dir: Path = cfg["mods_dir"]
 
@@ -97,6 +97,12 @@ def extract_archives(cfg: dict, force: bool = False):
         p for p in compressed_dir.iterdir()
         if p.is_file() and p.suffix.lower() in {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"}
     ]
+
+    if archive_name:
+        archives = [a for a in archives if a.stem == archive_name]
+        if not archives:
+            print(f"[error] No archive found for '{archive_name}' in compressed/")
+            return
 
     if not archives:
         print("[info] No archives found in compressed/.")
