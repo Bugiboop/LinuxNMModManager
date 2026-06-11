@@ -1,0 +1,124 @@
+{
+  "id": "fallout4",
+  "name": "Fallout 4",
+  "nexus_slug": "fallout4",
+  "steam_app_id": "377160",
+  "launch_exe": "Fallout4.exe",
+  "script_extender_exe": "f4se_loader.exe",
+  "pak_extensions": [
+    ".esp", ".esm", ".esl", ".ba2",
+    ".dll", ".exe", ".pex",
+    ".nif", ".dds", ".tri", ".hkx",
+    ".xml", ".swf", ".fuz", ".xwm",
+    ".wav", ".lip", ".psc", ".txt",
+    ".ini", ".json"
+  ],
+  "asset_extensions": [],
+  "ignored_filenames": [
+    "modinfo.ini", "1.png", "readme.txt",
+    "moduleconfig.xml", "info.xml",
+    "readme.md", "changes.txt", "changelog.txt"
+  ],
+  "ignored_directories": ["fomod", "FOMod"],
+  "plugin_extensions": [".esp", ".esm", ".esl"],
+  "plugins_txt_path": "~/.local/share/Steam/steamapps/compatdata/377160/pfx/drive_c/users/steamuser/AppData/Local/Fallout4/Plugins.txt",
+  "plugins_txt_relative": "users/steamuser/AppData/Local/Fallout4/Plugins.txt",
+  "install_rules": [
+    {"anchor": "Data",         "prefix": "",  "case_insensitive": true},
+    {"anchor": "LOOT",         "prefix": "",  "case_insensitive": false},
+    {"anchor": "f4se_0_07_08", "prefix": "",  "case_insensitive": true,  "dest_root": "game_root"},
+    {"anchor": "f4se_0_07_09", "prefix": "",  "case_insensitive": true,  "dest_root": "game_root"},
+    {"anchor": "f4se_0_07_10", "prefix": "",  "case_insensitive": true,  "dest_root": "game_root"}
+  ],
+  "default_install_path": "Data",
+  "data_subdir_anchors": [
+    "Meshes", "Textures", "Scripts", "Interface", "Materials",
+    "Sound", "Music", "Video", "Strings", "Misc", "Vis", "Terrain",
+    "Tools", "ShadersFX", "F4SE", "MCM"
+  ],
+  "special_extension_paths": {},
+  "utoc_strip_prefixes": [],
+  "ini_docs_relative": "Documents/My Games/Fallout4",
+  "ini_files": [
+    {
+      "label": "Display & Gameplay",
+      "file": "Fallout4Prefs.ini",
+      "settings": [
+        { "group": "Resolution", "label": "Resolution", "type": "resolution",
+          "section": "Display", "key_w": "iSize W", "key_h": "iSize H" },
+        { "group": "Display", "label": "Full Screen", "type": "bool",
+          "section": "Display", "key": "bFull Screen",
+          "hint": "Enable true full screen mode. Requires game restart." },
+        { "group": "Display", "label": "Borderless Window", "type": "bool",
+          "section": "Display", "key": "bBorderless",
+          "hint": "Borderless windowed mode. Usually requires Full Screen = off." },
+        { "group": "Display", "label": "VSync", "type": "bool",
+          "section": "Display", "key": "iPresentInterval",
+          "hint": "Synchronise frame rate to monitor refresh. Prevents screen tearing." },
+        { "group": "Display", "label": "Shadow Resolution", "type": "choice",
+          "section": "Display", "key": "iShadowMapResolution",
+          "hint": "Higher values give sharper shadows at a performance cost.",
+          "choices": [
+            {"label": "512  — Low",    "value": "512"},
+            {"label": "1024 — Medium", "value": "1024"},
+            {"label": "2048 — High",   "value": "2048"},
+            {"label": "4096 — Ultra",  "value": "4096"}
+          ]},
+        { "group": "Mouse", "label": "Mouse Acceleration", "type": "bool",
+          "section": "Controls", "key": "bMouseAcceleration",
+          "hint": "Disable for raw, 1:1 mouse input." }
+      ]
+    },
+    {
+      "label": "Field of View",
+      "file": "Fallout4.ini",
+      "settings": [
+        { "group": "FOV", "label": "1st Person FOV", "type": "int",
+          "section": "Display", "key": "fDefault1stPersonFOV",
+          "hint": "Default: 80. Recommended range: 70–110." },
+        { "group": "FOV", "label": "3rd Person FOV", "type": "int",
+          "section": "Display", "key": "fDefaultWorldFOV",
+          "hint": "Default: 70. Recommended range: 60–100." }
+      ]
+    }
+  ],
+  "symlink_mirrors": [
+    {
+      "from": "Meshes/actors/character/characterassets",
+      "to":   "Meshes/actors/character/playercharacterassets"
+    }
+  ],
+  "external_tools": [
+    {
+      "id": "bodyslide",
+      "name": "BodySlide and Outfit Studio",
+      "detect_path": "Data/Tools/BodySlide/BodySlide.exe",
+      "detect_path_alt": "Data/Tools/BodySlide/BodySlide x64.exe",
+      "launcher": "wine",
+      "launch_args": []
+    },
+    {
+      "id": "outfit_studio",
+      "name": "Outfit Studio",
+      "detect_path": "Data/Tools/BodySlide/OutfitStudio.exe",
+      "detect_path_alt": "Data/Tools/BodySlide/OutfitStudio x64.exe",
+      "launcher": "wine",
+      "launch_args": []
+    },
+    {
+      "id": "nemesis",
+      "name": "Nemesis Unlimited Behavior Engine",
+      "detect_path": "Nemesis_Engine/Nemesis Unlimited Behavior Engine.exe",
+      "launcher": "wine",
+      "launch_args": []
+    },
+    {
+      "id": "loot",
+      "name": "LOOT",
+      "detect_path": "LOOT/LOOT.exe",
+      "detect_path_alt": "LOOT.exe",
+      "launcher": "wine",
+      "launch_args": ["--game", "Fallout4"]
+    }
+  ]
+}

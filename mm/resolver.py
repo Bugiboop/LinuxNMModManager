@@ -4,6 +4,33 @@ import os
 from . import config
 
 
+def _normalize_path_case(path: Path) -> Path:
+    """
+    Walk each component of *path* and, if the parent directory already exists
+    on disk, replace the component with the actual on-disk casing of a matching
+    entry (case-insensitive match).  Components that don't exist yet are left
+    as-is.  This prevents mods that use different cases for the same directory
+    (e.g. 'Bodyslide' vs 'BodySlide') from creating duplicate directories on
+    Linux's case-sensitive filesystem.
+    """
+    parts = path.parts
+    result = Path(parts[0])
+    for part in parts[1:]:
+        if result.is_dir():
+            try:
+                for child in result.iterdir():
+                    if child.name.lower() == part.lower():
+                        result = child
+                        break
+                else:
+                    result = result / part
+            except OSError:
+                result = result / part
+        else:
+            result = result / part
+    return result
+
+
 def resolve_target(mod_root: Path, file_path: Path, game_root: Path,
                    profile: dict = None, game_tree: set = None) -> Path:
     """
@@ -32,7 +59,11 @@ def resolve_target(mod_root: Path, file_path: Path, game_root: Path,
             start  = max(0, idx - rule.get("anchor_offset", 0))
             tail   = Path(*parts[start:])
             prefix = rule.get("prefix", "")
-            return (game_root / prefix / tail) if prefix else (game_root / tail)
+            # dest_root: place file directly in game_root (strips all wrapper folders)
+            if rule.get("dest_root") == "game_root":
+                return _normalize_path_case(game_root / tail.name)
+            raw = (game_root / prefix / tail) if prefix else (game_root / tail)
+            return _normalize_path_case(raw)
 
     # Game-tree match – strip wrapper folders and compare suffix against real paths
     if game_tree:
@@ -41,22 +72,41 @@ def resolve_target(mod_root: Path, file_path: Path, game_root: Path,
                 break
             candidate = str(Path(*parts[i:]))
             if candidate in game_tree:
-                return game_root / Path(*parts[i:])
+                return _normalize_path_case(game_root / Path(*parts[i:]))
 
-    # Catch-all: profile-defined default path (or safe fallback)
+    # Data-subdir anchor pass: if a well-known Data subdirectory name appears
+    # anywhere in the path, route from that component onward into the install base.
+    # This handles mods packed with a version-named wrapper (e.g. "TWB v1.2/Tools/…")
+    # where no explicit anchor rule matches the wrapper folder name.
+    install_base_for_subdir = (profile or {}).get("default_install_path", "")
+    for subdir in (profile or {}).get("data_subdir_anchors", []):
+        subdir_lower = subdir.lower()
+        if subdir_lower in lower_parts:
+            idx  = lower_parts.index(subdir_lower)
+            tail = Path(*parts[idx:])
+            if install_base_for_subdir:
+                return _normalize_path_case(game_root / install_base_for_subdir / tail)
+            return _normalize_path_case(game_root / tail)
+
+    # Catch-all: profile-defined default path (or safe fallback).
+    # Preserve the full relative path within the mod (not just the filename) so
+    # subdirectory structure like Tools/BodySlide/SliderSets/ is kept intact.
     ext          = file_path.suffix.lower()
     special      = (profile or {}).get("special_extension_paths", {})
     install_base = (profile or {}).get("default_install_path", "")
     if ext in special:
-        return game_root / special[ext] / file_path.name
+        return _normalize_path_case(game_root / special[ext] / rel)
     if install_base:
-        return game_root / install_base / file_path.name
-    return game_root / file_path.name
+        return _normalize_path_case(game_root / install_base / rel)
+    return _normalize_path_case(game_root / rel)
 
 
-def iter_mod_files(mod_dir: Path):
+def iter_mod_files(mod_dir: Path, profile: dict = None):
     """Yield all regular files inside a mod directory, skipping known metadata files."""
-    for root, _dirs, files in os.walk(mod_dir):
+    ignored_dirs_lower = {d.lower() for d in (profile or {}).get("ignored_directories", [])}
+    for root, dirs, files in os.walk(mod_dir):
+        if ignored_dirs_lower:
+            dirs[:] = [d for d in dirs if d.lower() not in ignored_dirs_lower]
         for fname in files:
             if fname.lower() in config.IGNORED_FILENAMES:
                 continue

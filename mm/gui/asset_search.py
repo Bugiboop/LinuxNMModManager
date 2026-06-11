@@ -58,19 +58,49 @@ _WORKERS = min(8, (os.cpu_count() or 4))
 
 
 def _do_search(state: dict, query: str, enabled_only: bool, search_names: bool,
+               mods_dir: Path | None,
                progress_cb, result_cb, done_cb):
     """Search mod files in parallel using a thread pool."""
     query_lower = query.lower()
 
     # Build candidate list: (mod_name, Path)
     candidates: list[tuple[str, Path]] = []
+    seen_paths: set = set()
+
     for mod_name, info in state.get("mods", {}).items():
-        if enabled_only and not info.get("enabled", False):
+        is_enabled = info.get("enabled", False)
+        if enabled_only and not is_enabled:
             continue
-        for sl in info.get("symlinks", []):
-            target = Path(sl["target"])
-            if target.suffix.lower() in _SEARCH_EXTS and target.exists():
-                candidates.append((mod_name, target))
+
+        if is_enabled:
+            # Enabled mod: source paths are recorded in symlinks + disabled_symlinks
+            for sl in info.get("symlinks", []) + info.get("disabled_symlinks", []):
+                p = Path(sl["target"])
+                if p.suffix.lower() in _SEARCH_EXTS and p not in seen_paths and p.exists():
+                    candidates.append((mod_name, p))
+                    seen_paths.add(p)
+        elif mods_dir:
+            # Disabled mod: symlinks were cleared; scan the folder on disk
+            mod_folder = mods_dir / mod_name
+            if mod_folder.is_dir():
+                for root, _dirs, files in os.walk(mod_folder):
+                    for fname in files:
+                        p = Path(root) / fname
+                        if p.suffix.lower() in _SEARCH_EXTS and p not in seen_paths:
+                            candidates.append((mod_name, p))
+                            seen_paths.add(p)
+
+    # When not filtering by enabled, also pick up mod folders never tracked in state
+    if not enabled_only and mods_dir and mods_dir.is_dir():
+        tracked = set(state.get("mods", {}).keys())
+        for mod_folder in mods_dir.iterdir():
+            if mod_folder.is_dir() and mod_folder.name not in tracked:
+                for root, _dirs, files in os.walk(mod_folder):
+                    for fname in files:
+                        p = Path(root) / fname
+                        if p.suffix.lower() in _SEARCH_EXTS and p not in seen_paths:
+                            candidates.append((mod_folder.name, p))
+                            seen_paths.add(p)
 
     total = len(candidates)
     done_count = 0
@@ -106,9 +136,10 @@ def _do_search(state: dict, query: str, enabled_only: bool, search_names: bool,
 class AssetSearchWindow(ctk.CTkToplevel):
     """Popup that searches raw file contents of installed mods for a string."""
 
-    def __init__(self, master, state: dict, **kw):
+    def __init__(self, master, state: dict, mods_dir: Path | None = None, **kw):
         super().__init__(master, **kw)
-        self._state  = state
+        self._state    = state
+        self._mods_dir = mods_dir
         self._thread: threading.Thread | None = None
 
         self.title("Asset Search")
@@ -240,6 +271,7 @@ class AssetSearchWindow(ctk.CTkToplevel):
                 query,
                 self._enabled_only.get(),
                 self._search_names.get(),
+                self._mods_dir,
                 self._on_progress,
                 self._on_result,
                 self._on_done,

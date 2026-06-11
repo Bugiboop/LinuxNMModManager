@@ -9,7 +9,20 @@ from . import config
 
 def _extract_zip(archive: Path, dest: Path):
     with zipfile.ZipFile(archive) as zf:
-        zf.extractall(dest)
+        for member in zf.infolist():
+            # Normalize Windows backslashes so entries like "Data\F4SE\CBP.dll"
+            # create proper subdirectories instead of a flat file with backslashes
+            # in its name (Linux treats backslash as a valid filename character).
+            normalized = member.filename.replace("\\", "/")
+            if ".." in normalized.split("/"):
+                continue  # skip path-traversal attempts
+            target = dest / normalized
+            if member.is_dir() or normalized.endswith("/"):
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(member) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
 
 
 def _extract_7z(archive: Path, dest: Path):
@@ -157,13 +170,26 @@ def extract_archives(cfg: dict, force: bool = False, archive_name: str = None):
             _extract_7z(archive, dest)
 
         # --- variant selection ---
+        # Bethesda-engine games (those with plugin_extensions) use FOMOD for selective
+        # installation. Non-FOMOD mods install everything wholesale. Variant detection
+        # only applies to UE4/UE5 games where quality-variant packs are common.
         profile = cfg.get("profile", {})
-        anchors = {rule["anchor"].lower() for rule in profile.get("install_rules", [])}
-        groups = detect_variant_groups(dest, anchor_names=anchors)
-        for parent_dir, variants in groups:
-            chosen = prompt_variant_choice(parent_dir, variants)
-            if chosen is not None:
-                removed = [v for v in variants if v != chosen]
-                for v in removed:
-                    shutil.rmtree(v)
-                print(f"  [variants] Kept '{chosen.name}', removed {len(removed)} other variant(s).")
+        if profile.get("plugin_extensions"):
+            from .fomod import find_fomod_xml
+            if find_fomod_xml(dest) is not None:
+                print(f"  [fomod] FOMOD installer detected")
+            # else: no variants for Bethesda mods — install all files
+        else:
+            from .fomod import find_fomod_xml
+            if find_fomod_xml(dest) is not None:
+                print(f"  [fomod] FOMOD installer detected — skipping variant selection")
+            else:
+                anchors = {rule["anchor"].lower() for rule in profile.get("install_rules", [])}
+                groups = detect_variant_groups(dest, anchor_names=anchors)
+                for parent_dir, variants in groups:
+                    chosen = prompt_variant_choice(parent_dir, variants)
+                    if chosen is not None:
+                        removed = [v for v in variants if v != chosen]
+                        for v in removed:
+                            shutil.rmtree(v)
+                        print(f"  [variants] Kept '{chosen.name}', removed {len(removed)} other variant(s).")

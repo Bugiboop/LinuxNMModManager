@@ -1,9 +1,27 @@
 # Runtime data — local to each install, never commit
 state.json
-game_profiles/*/mods/*
-game_profiles/*/compressed/*
-game_profiles/*/compressed-disabled/*
 .nexus_cache/
+
+# Game profile directories — only track profile JSONs and placeholder files.
+# The broad rule catches loose mod folders placed directly in the profile root
+# (not just inside mods/) as well as everything else that isn't the app.
+game_profiles/*/*
+!game_profiles/*/*.json
+game_profiles/*/state.json
+!game_profiles/*/mods/
+game_profiles/*/mods/*
+!game_profiles/*/mods/The program will place extracted mods here.txt
+!game_profiles/*/compressed/
+game_profiles/*/compressed/*
+!game_profiles/*/compressed/Place Nexus Mods downloads here NO RENAME.txt
+!game_profiles/*/compressed-disabled/
+game_profiles/*/compressed-disabled/*
+!game_profiles/*/compressed-disabled/Script places unloadable (conflicts) mods here.txt
+
+# Side scripts / utilities not part of the application
+bodygen_convert.py
+FO4BodySlidePresetsToBodyGen/
+temp/
 
 # Python virtual environment
 .venv/
@@ -23,8 +41,5 @@ __pycache__/
 *.rar
 config.json
 .claude/
-!game_profiles/*/compressed/Place Nexus Mods downloads here NO RENAME.txt
-!game_profiles/*/compressed-disabled/Script places unloadable (conflicts) mods here.txt
-!game_profiles/*/mods/The program will place extracted mods here.txt
 build/
 dist/

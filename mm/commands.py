@@ -36,12 +36,16 @@ def cmd_enable(args, cfg, state):
     # args.enable is a mod name string, or True when flag used with no value
     mod_name = None if args.enable is True else args.enable
     mods_dir: Path = cfg["mods_dir"]
+    # Profiles with install_rules use anchor-based routing; game_tree is only
+    # needed for the fallback fuzzy-match in resolve_target (UE4/UE5 games).
+    profile = cfg.get("profile", {})
+    needs_tree = not profile.get("install_rules")
     if mod_name:
-        game_tree = scan_game_tree(cfg["game_root"])
+        game_tree = scan_game_tree(cfg["game_root"]) if needs_tree else set()
         enable_mod(mod_name, cfg, state, game_tree=game_tree)
     else:
         target_map = build_target_map(state)
-        game_tree = scan_game_tree(cfg["game_root"])
+        game_tree = scan_game_tree(cfg["game_root"]) if needs_tree else set()
         mod_names = [d.name for d in sorted(mods_dir.iterdir()) if d.is_dir()]
         for name in mod_names:
             enable_mod(name, cfg, state, target_map, game_tree)

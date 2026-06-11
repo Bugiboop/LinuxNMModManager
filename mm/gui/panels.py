@@ -18,8 +18,53 @@ import mm.gui.config as _gc
 from mm.gui.config import CONFIG_FILE
 from .constants import _BG, _INACTIVE, _HOVER
 from .info import _read_mod_info, _utoc_assets
-from .nexus import _nexus_id, _display_name, _strip_html
+from .nexus import (_nexus_id, _display_name, _strip_html,
+                    _nexus_fetch_requirements, _installed_nexus_ids)
 from .tooltip import attach_tooltip
+
+
+def _gather_recommendations(mod_name: str, mod_dir, cfg: dict) -> list:
+    """Return unmet recommendations for a mod: mm_metadata.json + Nexus requirements.
+
+    Filters out mods the user already has installed (by Nexus ID match).
+    Each entry is a dict with 'name' and 'reason'.
+    """
+    from pathlib import Path
+    import json as _json
+
+    recs: list[dict] = []
+    seen_names: set[str] = set()
+
+    # 1. mm_metadata.json (hand-authored, non-Nexus-aware)
+    meta_path = Path(mod_dir) / "mm_metadata.json"
+    if meta_path.exists():
+        try:
+            for r in _json.loads(meta_path.read_text(encoding="utf-8")).get("recommended_mods", []):
+                name = r.get("name", "")
+                if name and name not in seen_names:
+                    recs.append({"name": name, "reason": r.get("reason", ""), "source": "local"})
+                    seen_names.add(name)
+        except Exception:
+            pass
+
+    # 2. Nexus requirements (only when API key is configured)
+    api_key = cfg.get("nexus_api_key", "")
+    mods_dir = cfg.get("mods_dir")
+    if api_key and mods_dir:
+        mod_id = _nexus_id(mod_name)
+        if mod_id:
+            installed_ids = _installed_nexus_ids(Path(mods_dir))
+            for req in _nexus_fetch_requirements(mod_id, api_key):
+                req_id  = str(req.get("mod_id", ""))
+                req_name = req.get("name") or req.get("mod_name") or ""
+                if not req_name or req_id in installed_ids:
+                    continue
+                if req_name not in seen_names:
+                    recs.append({"name": req_name, "reason": "Listed as a requirement on the Nexus mod page.",
+                                 "nexus_id": req_id, "source": "nexus"})
+                    seen_names.add(req_name)
+
+    return recs
 
 
 class PanelsMixin:
@@ -49,6 +94,7 @@ class PanelsMixin:
         )
         self._page_nav.set("Mods")
         self._page_nav.grid(row=0, column=0, padx=8, pady=5)
+        self._page_nav_has_plugins = False   # track whether Plugins tab is present
 
         # Badge shows active download count
         self._dl_nav_badge = ctk.CTkLabel(
@@ -93,6 +139,34 @@ class PanelsMixin:
         self._page_downloads.grid_rowconfigure(0, weight=1)
         self._page_downloads.grid_remove()   # hidden initially
 
+        # Plugins page (shown only for Bethesda-engine games)
+        self._page_plugins = ctk.CTkFrame(main, fg_color="transparent",
+                                          corner_radius=0)
+        self._page_plugins.grid(row=1, column=0, sticky="nsew")
+        self._page_plugins.grid_columnconfigure(0, weight=1)
+        self._page_plugins.grid_rowconfigure(0, weight=1)
+        self._page_plugins.grid_remove()     # hidden initially
+        self._build_plugins_panel(self._page_plugins)
+
+        # Conflicts page (shown when any conflicts exist)
+        self._page_conflicts = ctk.CTkFrame(main, fg_color="transparent",
+                                            corner_radius=0)
+        self._page_conflicts.grid(row=1, column=0, sticky="nsew")
+        self._page_conflicts.grid_columnconfigure(0, weight=1)
+        self._page_conflicts.grid_rowconfigure(0, weight=1)
+        self._page_conflicts.grid_remove()   # hidden initially
+        self._build_conflicts_panel(self._page_conflicts)
+        self._page_nav_has_conflicts = False
+
+        # Game Settings (INI) page — shown when profile has ini_files
+        self._page_ini = ctk.CTkFrame(main, fg_color="transparent", corner_radius=0)
+        self._page_ini.grid(row=1, column=0, sticky="nsew")
+        self._page_ini.grid_columnconfigure(0, weight=1)
+        self._page_ini.grid_rowconfigure(0, weight=1)
+        self._page_ini.grid_remove()   # hidden initially
+        self._build_ini_panel(self._page_ini)
+        self._page_nav_has_ini = False
+
         # ── Mods page: info + log panels (unchanged layout) ───────────
         self._build_info_panel(self._page_mods)
         log_outer = self._build_log_panel(self._page_mods)
@@ -112,11 +186,23 @@ class PanelsMixin:
         self._build_downloads_panel(self._page_downloads)
 
     def _on_page_select(self, value: str):
+        self._page_mods.grid_remove()
+        self._page_downloads.grid_remove()
+        self._page_plugins.grid_remove()
+        self._page_conflicts.grid_remove()
+        self._page_ini.grid_remove()
         if value == "Downloads":
-            self._page_mods.grid_remove()
             self._page_downloads.grid()
+        elif value == "Plugins":
+            self._page_plugins.grid()
+            self._refresh_plugins_panel()
+        elif value == "Conflicts":
+            self._page_conflicts.grid()
+            self._refresh_conflicts_panel()
+        elif value == "Game Settings":
+            self._page_ini.grid()
+            self._refresh_ini_panel()
         else:
-            self._page_downloads.grid_remove()
             self._page_mods.grid()
 
     # ── Info panel ────────────────────────────────────────────────────
@@ -362,72 +448,145 @@ class PanelsMixin:
             self._bind_scroll(lbl, self._files_scroll)
             return
 
-        # Group by stem so .pak/.utoc/.ucas appear as one row
         from pathlib import Path as _P
         from collections import defaultdict
+        game_root      = self._cfg.get("game_root")
+        profile        = self._cfg.get("profile", {})
+        plugin_exts    = {e.lower() for e in profile.get("plugin_extensions", [])}
         disabled_stems = set(ms.get("disabled_files", []))
-        groups: dict = defaultdict(list)
-        for entry in all_entries:
-            stem = _P(entry["target"]).stem
-            groups[stem].append(entry)
 
-        game_root = self._cfg.get("game_root")
-
-        row = 0
-        for stem in sorted(groups):
-            entries   = groups[stem]
-            is_active = stem not in disabled_stems
-            exts      = sorted({_P(e["target"]).suffix for e in entries})
-            ext_str   = "  ".join(exts)
-            # Destination directory (from first entry's link path)
-            dest_dir  = str(_P(entries[0]["link"]).parent)
+        def _rel(link_str: str) -> str:
+            p = _P(link_str)
             if game_root:
                 try:
-                    dest_dir = str(_P(dest_dir).relative_to(game_root))
+                    return str(p.relative_to(game_root))
                 except ValueError:
                     pass
+            return str(p)
 
-            row_frame = ctk.CTkFrame(
-                self._files_scroll, fg_color="transparent",
-            )
-            row_frame.grid(row=row, column=0, sticky="ew", padx=8, pady=2)
-            row_frame.grid_columnconfigure(1, weight=1)
+        row = 0
 
-            sw_var = ctk.BooleanVar(value=is_active)
-            sw = ctk.CTkSwitch(
-                row_frame, text="", variable=sw_var,
-                width=40, onvalue=True, offvalue=False,
-                command=lambda s=stem, v=sw_var: self._toggle_mod_file(mod_name, s, v),
-            )
-            sw.grid(row=0, column=0, padx=(0, 8))
+        if plugin_exts:
+            # ── Bethesda mode: plugins with toggles + directory summary ──────
+            plugins = [e for e in all_entries
+                       if _P(e["link"]).suffix.lower() in plugin_exts]
+            others  = [e for e in all_entries
+                       if _P(e["link"]).suffix.lower() not in plugin_exts]
 
-            name_lbl = ctk.CTkLabel(
-                row_frame, text=stem,
-                font=ctk.CTkFont(size=12),
-                text_color=("gray15", "gray85") if is_active else ("gray55", "gray45"),
-                anchor="w",
-            )
-            name_lbl.grid(row=0, column=1, sticky="w")
+            if plugins:
+                ctk.CTkLabel(
+                    self._files_scroll,
+                    text="PLUGINS",
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    text_color=("gray45", "gray55"), anchor="w",
+                ).grid(row=row, column=0, sticky="w", padx=10, pady=(8, 2))
+                row += 1
 
-            ctk.CTkLabel(
-                row_frame, text=ext_str,
-                font=ctk.CTkFont(size=10),
-                text_color=("gray55", "gray50"),
-                anchor="e",
-            ).grid(row=0, column=2, padx=(4, 0))
+                for entry in sorted(plugins, key=lambda e: _P(e["link"]).name.lower()):
+                    stem     = _P(entry["target"]).stem
+                    is_act   = stem not in disabled_stems
+                    fname    = _P(entry["link"]).name
+                    rf = ctk.CTkFrame(self._files_scroll, fg_color="transparent")
+                    rf.grid(row=row, column=0, sticky="ew", padx=8, pady=1)
+                    rf.grid_columnconfigure(1, weight=1)
+                    sw_var = ctk.BooleanVar(value=is_act)
+                    ctk.CTkSwitch(
+                        rf, text="", variable=sw_var, width=40,
+                        onvalue=True, offvalue=False,
+                        command=lambda s=stem, v=sw_var:
+                            self._toggle_mod_file(mod_name, s, v),
+                    ).grid(row=0, column=0, padx=(0, 8))
+                    ctk.CTkLabel(
+                        rf, text=fname,
+                        font=ctk.CTkFont(size=12),
+                        text_color=("gray15", "gray85") if is_act else ("gray55", "gray45"),
+                        anchor="w",
+                    ).grid(row=0, column=1, sticky="w")
+                    self._bind_scroll(rf, self._files_scroll)
+                    row += 1
 
-            dest_lbl = ctk.CTkLabel(
-                self._files_scroll, text=dest_dir,
-                font=ctk.CTkFont(size=10),
-                text_color=("gray55", "gray45"),
-                anchor="w",
-            )
-            dest_lbl.grid(row=row + 1, column=0, sticky="w", padx=(60, 8), pady=(0, 4))
+            if others:
+                ctk.CTkLabel(
+                    self._files_scroll,
+                    text="OTHER FILES",
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    text_color=("gray45", "gray55"), anchor="w",
+                ).grid(row=row, column=0, sticky="w", padx=10, pady=(12, 2))
+                row += 1
 
-            self._bind_scroll(row_frame, self._files_scroll)
-            self._bind_scroll(dest_lbl,  self._files_scroll)
+                dir_counts: dict = defaultdict(int)
+                for entry in others:
+                    dir_counts[_P(_rel(entry["link"])).parent].files = \
+                        dir_counts.get(_P(_rel(entry["link"])).parent, 0) + 1
+                # Simpler: just count per parent dir string
+                dir_counts2: dict = defaultdict(int)
+                for entry in others:
+                    dir_counts2[str(_P(_rel(entry["link"])).parent)] += 1
 
-            row += 2
+                for d in sorted(dir_counts2):
+                    n = dir_counts2[d]
+                    lbl = ctk.CTkLabel(
+                        self._files_scroll,
+                        text=f"  {d}  ({n} file{'s' if n != 1 else ''})",
+                        font=ctk.CTkFont(family="monospace", size=11),
+                        text_color=("gray40", "gray65"), anchor="w",
+                    )
+                    lbl.grid(row=row, column=0, sticky="w", padx=8, pady=1)
+                    self._bind_scroll(lbl, self._files_scroll)
+                    row += 1
+
+        else:
+            # ── UE4/UE5 mode: group by stem so .pak/.utoc/.ucas share a row ──
+            groups: dict = defaultdict(list)
+            for entry in all_entries:
+                stem = _P(entry["target"]).stem
+                groups[stem].append(entry)
+
+            for stem in sorted(groups):
+                entries  = groups[stem]
+                is_act   = stem not in disabled_stems
+                exts     = sorted({_P(e["target"]).suffix for e in entries})
+                dest_dir = str(_P(entries[0]["link"]).parent)
+                if game_root:
+                    try:
+                        dest_dir = str(_P(dest_dir).relative_to(game_root))
+                    except ValueError:
+                        pass
+
+                rf = ctk.CTkFrame(self._files_scroll, fg_color="transparent")
+                rf.grid(row=row, column=0, sticky="ew", padx=8, pady=2)
+                rf.grid_columnconfigure(1, weight=1)
+
+                sw_var = ctk.BooleanVar(value=is_act)
+                ctk.CTkSwitch(
+                    rf, text="", variable=sw_var, width=40,
+                    onvalue=True, offvalue=False,
+                    command=lambda s=stem, v=sw_var:
+                        self._toggle_mod_file(mod_name, s, v),
+                ).grid(row=0, column=0, padx=(0, 8))
+                ctk.CTkLabel(
+                    rf, text=stem,
+                    font=ctk.CTkFont(size=12),
+                    text_color=("gray15", "gray85") if is_act else ("gray55", "gray45"),
+                    anchor="w",
+                ).grid(row=0, column=1, sticky="w")
+                ctk.CTkLabel(
+                    rf, text="  ".join(exts),
+                    font=ctk.CTkFont(size=10),
+                    text_color=("gray55", "gray50"), anchor="e",
+                ).grid(row=0, column=2, padx=(4, 0))
+
+                dest_lbl = ctk.CTkLabel(
+                    self._files_scroll, text=dest_dir,
+                    font=ctk.CTkFont(size=10),
+                    text_color=("gray55", "gray45"), anchor="w",
+                )
+                dest_lbl.grid(row=row + 1, column=0, sticky="w",
+                               padx=(60, 8), pady=(0, 4))
+
+                self._bind_scroll(rf,       self._files_scroll)
+                self._bind_scroll(dest_lbl, self._files_scroll)
+                row += 2
 
     def _toggle_mod_file(self, mod_name: str, stem: str, var: "ctk.BooleanVar"):
         from mm.mods import toggle_mod_file_stem
@@ -547,6 +706,18 @@ class PanelsMixin:
 
     def _update_info_panel(self, name):
         """Populate the info panel for the given mod folder name (or None)."""
+        import time as _time
+        _now = _time.monotonic()
+        # Skip rebuild if the same panel was built for the same mod within 150 ms.
+        # Background callbacks (Nexus sort flush, _maybe_refresh_nexus) fire many
+        # times per click; coalescing them here prevents the flash-on-every-completion
+        # effect regardless of which code path triggered the call.
+        if (name is not None
+                and name == getattr(self, "_info_panel_last_name", None)
+                and _now - getattr(self, "_info_panel_last_ts", 0.0) < 0.15):
+            return
+        self._info_panel_last_name = name
+        self._info_panel_last_ts   = _now
         self._update_action_buttons()
         self._cancel_img_overlay()
         for w in self._info_scroll.winfo_children():
@@ -697,7 +868,15 @@ class PanelsMixin:
                              wraplength=380,
                              ).grid(row=row, column=1, sticky="w", pady=1)
 
-        title = info.get("name") or disp
+        # For mods that share a Nexus page (same mod ID, different files), the
+        # API returns the same mod-page name for both.  Use the folder-derived
+        # name instead — it captures file-specific descriptions like "CBBE Patch v2".
+        dup_nids = getattr(self, "_dup_nids", set())
+        if nid and nid in dup_nids:
+            folder_title = _display_name(name)
+            title = folder_title if folder_title and folder_title != name else (info.get("name") or disp)
+        else:
+            title = info.get("name") or disp
         ctk.CTkLabel(meta, text=title,
                      font=ctk.CTkFont(size=15, weight="bold"),
                      text_color=("gray10", "gray92"), anchor="w",
@@ -732,6 +911,30 @@ class PanelsMixin:
 
         if not exists:
             _field("Note", "Folder not on disk (state record only)", r); r += 1
+
+        # ── Conflict note ─────────────────────────────────────────────
+        from mm.conflicts import get_conflicts_for_mod, get_rule as _get_rule
+        _rules = self._state.get("conflict_rules", [])
+        all_conflict_pairs = get_conflicts_for_mod(name, self._state)
+        if all_conflict_pairs:
+            n_unresolved = sum(
+                1 for o, _ in all_conflict_pairs
+                if _get_rule(name, o, _rules) is None
+            )
+            if n_unresolved:
+                note = f"⚠  {n_unresolved} unresolved conflict{'s' if n_unresolved > 1 else ''}"
+                col  = ("#c07010", "#c08030")
+            else:
+                note = f"✓  {len(all_conflict_pairs)} conflict{'s' if len(all_conflict_pairs) > 1 else ''} — rules set"
+                col  = ("gray50", "gray55")
+            ctk.CTkButton(
+                meta, text=note + "  →  Conflicts tab",
+                height=22, fg_color="transparent", hover=False,
+                font=ctk.CTkFont(size=11, underline=True),
+                text_color=col, anchor="w",
+                command=lambda: (self._page_nav.set("Conflicts"),
+                                 self._on_page_select("Conflicts")),
+            ).grid(row=r, column=0, columnspan=2, sticky="w", pady=(4, 0)); r += 1
 
         # ── Description ───────────────────────────────────────────────
         desc = info.get("description") or info.get("readme_text", "")
@@ -975,6 +1178,11 @@ class PanelsMixin:
             "Disable this mod, delete its folder, and clear its saved state",
         )
 
+        # External tools row (shown only when profile defines external_tools)
+        self._tools_frame = ctk.CTkFrame(outer, fg_color="transparent")
+        self._tools_frame.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 8))
+        self._tools_frame.grid_remove()   # hidden until tools are detected
+
         return outer
 
     def _update_action_buttons(self):
@@ -997,19 +1205,30 @@ class PanelsMixin:
             self._btn_uninstall.configure(state="disabled")
         else:
             ms = self._state["mods"].get(name, {})
+            exists = name in self._on_disk
             if ms.get("enabled"):
                 self._btn_mod_action.configure(
                     state="normal", text="Disable",
                     fg_color=("gray52", "gray38"), hover_color=("gray42", "gray46"),
                 )
                 self._tt_mod_action.update("Disable this mod (removes its symlinks)")
-            else:
+            elif exists:
                 self._btn_mod_action.configure(
                     state="normal", text="Enable",
                     fg_color=("#1a5a9a", "#1a5a9a"), hover_color=("#1a6aaa", "#1a6aaa"),
                 )
                 self._tt_mod_action.update("Enable this mod (creates symlinks into the game folder)")
-            self._btn_uninstall.configure(state="normal")
+            else:
+                # Ghost entry: tracked in state but folder deleted from disk
+                self._btn_mod_action.configure(
+                    state="disabled", text="Enable",
+                    fg_color=("gray72", "gray30"), hover_color=("gray62", "gray38"),
+                )
+                self._tt_mod_action.update("Mod folder not found — use Uninstall to remove this entry")
+            self._btn_uninstall.configure(
+                state="normal",
+                text="Remove" if not exists else "Uninstall",
+            )
 
     def _mod_action(self):
         """Enable, disable, or extract the focused mod depending on its current state."""
@@ -1020,10 +1239,167 @@ class PanelsMixin:
             self._run_interactive(["--extract", name], on_done=self.refresh_mods)
         else:
             ms = self._state["mods"].get(name, {})
-            if ms.get("enabled"):
-                self._run_bg(["--disable", name], on_done=self.refresh_mods)
-            else:
-                self._run_interactive(["--enable", name], on_done=self.refresh_mods)
+            self._stage_mod(name, not ms.get("enabled", False))
+            self.refresh_mods()
+
+    def _fomod_or_enable(self, mod_name: str, on_done=None):
+        """
+        Central enable entry point used by the Enable button, toggle switch, and
+        batch-enable. Checks for a FOMOD installer and routes accordingly.
+        """
+        if on_done is None:
+            on_done = self.refresh_mods
+
+        mod_dir = self._cfg.get("mods_dir")
+        if mod_dir is None:
+            self._run_interactive(["--enable", mod_name], on_done=on_done)
+            return
+
+        mod_path = mod_dir / mod_name
+        if not mod_path.is_dir():
+            self._run_interactive(["--enable", mod_name], on_done=on_done)
+            return
+
+        from mm.fomod import find_fomod_xml
+        fomod_xml = find_fomod_xml(mod_path)
+        if fomod_xml:
+            self._enable_with_fomod(mod_name, on_done=on_done)
+        else:
+            def _on_done_with_recs():
+                if on_done:
+                    on_done()
+                self._check_and_show_recommendations(mod_name, mod_path)
+            self._run_interactive(["--enable", mod_name], on_done=_on_done_with_recs)
+
+    def _enable_with_fomod(self, mod_name: str, on_done=None):
+        """Show the FOMOD wizard then install the selected files in a background thread."""
+        from mm.fomod import find_fomod_xml, parse_fomod
+        from mm.gui.fomod_dialog import FomodWizard
+        from mm.mods import enable_mod
+
+        if on_done is None:
+            on_done = self.refresh_mods
+
+        mod_dir = self._cfg["mods_dir"] / mod_name
+        fomod_xml = find_fomod_xml(mod_dir)
+        if not fomod_xml:
+            self._run_interactive(["--enable", mod_name], on_done=on_done)
+            return
+
+        try:
+            fomod_config = parse_fomod(fomod_xml)
+        except Exception as e:
+            self._log_write(f"[fomod] Failed to parse installer: {e}\n")
+            self._run_interactive(["--enable", mod_name], on_done=on_done)
+            return
+
+        # No install steps → only requiredInstallFiles / conditional patterns.
+        # Skip the wizard entirely and install silently with empty selections.
+        if not fomod_config.steps:
+            selections = {}
+        else:
+            stored = self._state["mods"].get(mod_name, {}).get("fomod_selections")
+            initial = {k: v for k, v in stored.items()} if stored else None
+
+            wizard = FomodWizard(self, fomod_config, mod_dir, initial_selections=initial)
+            self.wait_window(wizard)
+
+            if wizard.result is None:
+                self._log_write(f"[cancelled] FOMOD wizard cancelled for {mod_name}\n")
+                return
+
+            selections = wizard.result
+
+        def fomod_callback(config, stored_sel=None):
+            return selections
+
+        def _worker():
+            try:
+                # For Bethesda-engine games with Data/ anchor rules, game_tree is not
+                # needed — anchor rules route every file without a full directory scan.
+                game_tree = set() if self._profile and self._profile.get("install_rules") else None
+                enable_mod(mod_name, self._cfg, self._state,
+                           game_tree=game_tree, fomod_callback=fomod_callback)
+                _gc._save_state(self._state)
+            except Exception as e:
+                self.after(0, self._log_write, f"[error] {e}\n")
+            finally:
+                self.after(200, on_done)
+                recs = _gather_recommendations(mod_name, mod_dir, self._cfg)
+                if recs:
+                    self.after(400, self._show_recommendations, mod_name, recs)
+
+        self._log_write(f"\n[fomod] Installing {mod_name} with wizard selections…\n")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _check_and_show_recommendations(self, mod_name: str, mod_path):
+        """Merge mm_metadata.json + Nexus requirements in a background thread."""
+        cfg_snapshot = dict(self._cfg)
+
+        def _bg():
+            recs = _gather_recommendations(mod_name, mod_path, cfg_snapshot)
+            if recs:
+                self.after(200, self._show_recommendations, mod_name, recs)
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _show_recommendations(self, mod_name: str, recs: list):
+        """Show a non-blocking notice listing recommended companion mods."""
+        import customtkinter as ctk
+
+        win = ctk.CTkToplevel(self)
+        win.title("Recommended Mods")
+        win.geometry("520x300")
+        win.resizable(True, True)
+        win.transient(self)
+        win.grab_set()
+        win.grid_columnconfigure(0, weight=1)
+        win.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            win,
+            text=f'Mods recommended alongside  “{mod_name}”:',
+            font=ctk.CTkFont(size=13, weight="bold"),
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 6))
+
+        scroll = ctk.CTkScrollableFrame(win, fg_color="transparent")
+        scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=0)
+        scroll.grid_columnconfigure(0, weight=1)
+
+        for i, rec in enumerate(recs):
+            card = ctk.CTkFrame(scroll, fg_color=("gray88", "gray16"), corner_radius=6)
+            card.grid(row=i, column=0, sticky="ew", padx=10, pady=(0, 8))
+            card.grid_columnconfigure(0, weight=1)
+
+            ctk.CTkLabel(
+                card,
+                text=rec.get("name", ""),
+                font=ctk.CTkFont(size=12, weight="bold"),
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 2))
+
+            reason = rec.get("reason", "")
+            if reason:
+                ctk.CTkLabel(
+                    card,
+                    text=reason,
+                    font=ctk.CTkFont(size=11),
+                    text_color=("gray45", "gray60"),
+                    anchor="w",
+                    wraplength=460,
+                    justify="left",
+                ).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 10))
+
+        ctk.CTkButton(
+            win, text="Dismiss", width=100, command=win.destroy,
+        ).grid(row=2, column=0, pady=10)
+
+        win.after(50, lambda: (
+            win.deiconify(),
+            win.lift(),
+            win.focus_force(),
+        ))
 
     def _uninstall_focused(self):
         """Disable, delete folder, and purge state for the focused mod."""
@@ -1046,7 +1422,7 @@ class PanelsMixin:
 
     def _open_asset_search(self):
         from .asset_search import AssetSearchWindow
-        AssetSearchWindow(self, self._state)
+        AssetSearchWindow(self, self._state, mods_dir=self._cfg.get("mods_dir"))
 
     def _launch_steam(self):
         app_id = self._profile.get("steam_app_id") if self._profile else None
@@ -1058,19 +1434,101 @@ class PanelsMixin:
             )
             return
         try:
-            subprocess.Popen(["steam", f"steam://run/{app_id}"])
+            subprocess.Popen(["xdg-open", f"steam://run/{app_id}"])
         except FileNotFoundError:
-            tkmsgbox.showerror("Steam Not Found",
-                               "Could not find the 'steam' executable.\n"
-                               "Make sure Steam is installed and on your PATH.")
+            try:
+                subprocess.Popen(["steam", f"steam://run/{app_id}"])
+            except FileNotFoundError:
+                tkmsgbox.showerror("Steam Not Found",
+                                   "Could not find 'steam' or 'xdg-open'.\n"
+                                   "Make sure Steam is installed.")
+
+    def _launch_via_script_extender(self):
+        from mm.external_tools import launch_script_extender
+        ok, msg = launch_script_extender(
+            self._profile, self._cfg["game_root"], self._cfg)
+        if ok:
+            self._log_write(f"[launch] {msg}\n")
+        else:
+            tkmsgbox.showerror("Launch Error", msg, parent=self)
+
+    def _has_script_extender(self) -> bool:
+        se_exe = (self._profile or {}).get("script_extender_exe", "")
+        game_root = self._cfg.get("game_root")
+        if not se_exe or not game_root:
+            return False
+        return (game_root / se_exe).exists()
 
     def _update_launch_button(self):
-        """Show or hide the Launch button depending on whether the profile has a Steam app ID."""
-        has_id = bool(self._profile.get("steam_app_id") if self._profile else False)
-        if has_id:
+        """Show or hide the Launch button; switch to F4SE/SKSE if installed."""
+        has_id = bool((self._profile or {}).get("steam_app_id"))
+        has_se = self._has_script_extender()
+        se_name = ((self._profile or {}).get("script_extender_exe", "").split(".")[0].upper()
+                   or "Script Extender")
+
+        if has_se:
+            self._btn_launch_steam.configure(
+                text=f"▶  Launch via {se_name}",
+                command=self._launch_via_script_extender,
+            )
+        else:
+            self._btn_launch_steam.configure(
+                text="▶  Launch Game (Steam)",
+                command=self._launch_steam,
+            )
+
+        if has_id or has_se:
             self._btn_launch_steam.grid()
         else:
             self._btn_launch_steam.grid_remove()
+
+    def _refresh_tools_buttons(self):
+        """Rebuild the external tools button bar below the mod action buttons."""
+        if not hasattr(self, "_tools_frame"):
+            return
+        for w in self._tools_frame.winfo_children():
+            w.destroy()
+
+        profile = getattr(self, "_profile", {}) or {}
+        tools = profile.get("external_tools", [])
+        if not tools:
+            self._tools_frame.grid_remove()
+            return
+
+        from mm.external_tools import get_tool_buttons, launch_tool
+        mods_dir = self._cfg.get("mods_dir")
+        game_root = self._cfg.get("game_root")
+        tool_list = get_tool_buttons(profile, mods_dir, game_root, self._cfg)
+
+        if not tool_list:
+            self._tools_frame.grid_remove()
+            return
+
+        self._tools_frame.grid()
+        for col, tinfo in enumerate(tool_list):
+            btn = ctk.CTkButton(
+                self._tools_frame,
+                text=tinfo["name"],
+                height=28,
+                font=ctk.CTkFont(size=11),
+                fg_color=("gray72", "gray30") if tinfo["available"] else ("gray80", "gray22"),
+                hover_color=("gray62", "gray38") if tinfo["available"] else ("gray75", "gray25"),
+                text_color=("gray10", "gray90") if tinfo["available"] else ("gray55", "gray55"),
+                command=(lambda tc=tinfo["tool_cfg"]:
+                         self._launch_external_tool(tc)) if tinfo["available"] else None,
+            )
+            btn.grid(row=0, column=col, padx=(0, 4), sticky="w")
+
+    def _launch_external_tool(self, tool_cfg: dict):
+        from mm.external_tools import launch_tool
+        mods_dir = self._cfg.get("mods_dir")
+        game_root = self._cfg.get("game_root")
+        ok, msg = launch_tool(tool_cfg, mods_dir, game_root, self._cfg,
+                              profile=self._profile)
+        if ok:
+            self._log_write(f"[tool] {msg}\n")
+        else:
+            tkmsgbox.showerror(f"{tool_cfg.get('name', 'Tool')} Error", msg, parent=self)
 
     # ── Status bar ────────────────────────────────────────────────────
 
@@ -1090,6 +1548,38 @@ class PanelsMixin:
                                   font=ctk.CTkFont(size=11),
                                   text_color=("gray38", "gray60"))
         self._busy.grid(row=0, column=1, sticky="e", padx=12)
+
+        # Spinner state (for profile-switching animation)
+        self._spinner_after_id: str | None = None
+        self._spinner_frame_idx: int = 0
+
+    _SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+    _SPINNER_MSG    = "Loading…"
+
+    def _spinner_tick(self):
+        """Advance spinner one frame; reschedule itself until stopped."""
+        if self._spinner_after_id is None:
+            return   # stopped
+        f = self._SPINNER_FRAMES[self._spinner_frame_idx % len(self._SPINNER_FRAMES)]
+        self._spinner_frame_idx += 1
+        self._busy.configure(text=f"  {f}  {self._SPINNER_MSG}")
+        self._spinner_after_id = self.after(80, self._spinner_tick)
+
+    def _spinner_start(self, msg: str = "Loading…"):
+        self._SPINNER_MSG = msg
+        if self._spinner_after_id is not None:
+            return   # already running
+        self._spinner_frame_idx = 0
+        self._spinner_after_id = self.after(0, self._spinner_tick)
+
+    def _spinner_stop(self):
+        if self._spinner_after_id is not None:
+            self.after_cancel(self._spinner_after_id)
+            self._spinner_after_id = None
+        # Only clear _busy if it's showing the spinner (not a subprocess message)
+        current = self._busy.cget("text")
+        if self._SPINNER_MSG in current:
+            self._busy.configure(text="")
 
     # ── Settings window ───────────────────────────────────────────────
 
@@ -1265,6 +1755,83 @@ class PanelsMixin:
         row = _path_row("Mods Folder",     "mods_dir",       row)
         row = _path_row("Archives Folder", "compressed_dir", row)
 
+        # ── Plugins (Bethesda games only) ─────────────────────────────
+        if self._profile and self._profile.get("plugin_extensions"):
+            row = _section_header("PLUGINS", row)
+
+            # Plugins.txt file picker
+            f = ctk.CTkFrame(scroll, fg_color="transparent")
+            f.grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 2))
+            f.grid_columnconfigure(1, weight=1)
+            row += 1
+
+            ctk.CTkLabel(f, text="Plugins.txt", width=120, anchor="w",
+                         font=ctk.CTkFont(size=12),
+                         ).grid(row=0, column=0, sticky="w", pady=4)
+
+            profile_default = self._profile.get("plugins_txt_path", "")
+            plugins_txt_var = ctk.StringVar(
+                value=game_section.get("plugins_txt_path", "") or profile_default)
+            path_vars["plugins_txt_path"] = plugins_txt_var
+            ctk.CTkEntry(f, textvariable=plugins_txt_var,
+                         placeholder_text="Path to Plugins.txt",
+                         ).grid(row=0, column=1, sticky="ew", padx=(0, 6))
+
+            def _browse_plugins_txt(v=plugins_txt_var):
+                p = tkinter.filedialog.askopenfilename(
+                    title="Select Plugins.txt",
+                    filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                    parent=win,
+                )
+                if p:
+                    v.set(p)
+
+            ctk.CTkButton(f, text="Browse…", width=80, height=28,
+                          fg_color=("gray72", "gray30"),
+                          hover_color=("gray62", "gray38"),
+                          font=ctk.CTkFont(size=11),
+                          command=_browse_plugins_txt,
+                          ).grid(row=0, column=2)
+
+            ctk.CTkLabel(
+                scroll, text="Usually inside your Proton/Wine prefix at "
+                             "AppData/Local/<Game>/Plugins.txt",
+                font=ctk.CTkFont(size=10),
+                text_color=("gray55", "gray50"), anchor="w",
+            ).grid(row=row, column=0, sticky="w", padx=32, pady=(0, 4))
+            row += 1
+
+        # ── External Tools (Wine/Proton) ───────────────────────────────
+        if self._profile and self._profile.get("external_tools"):
+            wine_tools = [t for t in self._profile["external_tools"]
+                          if t.get("launcher") in ("wine", "proton")]
+            if wine_tools:
+                row = _section_header("EXTERNAL TOOLS", row)
+
+                f = ctk.CTkFrame(scroll, fg_color="transparent")
+                f.grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 2))
+                f.grid_columnconfigure(1, weight=1)
+                row += 1
+
+                ctk.CTkLabel(f, text="Wine/Proton\nCommand", width=120, anchor="w",
+                             font=ctk.CTkFont(size=12),
+                             ).grid(row=0, column=0, sticky="w", pady=4)
+
+                wine_var = ctk.StringVar(value=game_section.get("wine_cmd", "wine"))
+                path_vars["wine_cmd"] = wine_var
+                ctk.CTkEntry(f, textvariable=wine_var,
+                             placeholder_text="wine",
+                             ).grid(row=0, column=1, sticky="ew", padx=(0, 6))
+
+                ctk.CTkLabel(
+                    scroll,
+                    text="Command used to run Windows .exe tools (BodySlide, Nemesis…).\n"
+                         "Use 'wine', or a full path to a Proton binary.",
+                    font=ctk.CTkFont(size=10),
+                    text_color=("gray55", "gray50"), anchor="w", justify="left",
+                ).grid(row=row, column=0, sticky="w", padx=32, pady=(0, 4))
+                row += 1
+
         # ── Appearance ────────────────────────────────────────────────
         row = _section_header("APPEARANCE", row)
 
@@ -1289,12 +1856,22 @@ class PanelsMixin:
         def _save():
             new_raw = dict(raw)
             new_raw["theme"] = theme_var.get()
-            new_raw.setdefault("games", {})[current_game] = {
+            game_data = {
                 "game_root":      path_vars["game_root"].get().strip(),
                 "mods_dir":       path_vars["mods_dir"].get().strip(),
                 "compressed_dir": path_vars["compressed_dir"].get().strip(),
                 "nexus_api_key":  api_var.get().strip(),
             }
+            # Optional Bethesda fields (only present if profile has them)
+            if "plugins_txt_path" in path_vars:
+                v = path_vars["plugins_txt_path"].get().strip()
+                if v:
+                    game_data["plugins_txt_path"] = v
+            if "wine_cmd" in path_vars:
+                v = path_vars["wine_cmd"].get().strip()
+                if v:
+                    game_data["wine_cmd"] = v
+            new_raw.setdefault("games", {})[current_game] = game_data
             try:
                 CONFIG_FILE.write_text(json.dumps(new_raw, indent=2))
             except Exception as e:

@@ -77,11 +77,15 @@ def load_config() -> dict:
     data_dir = PROFILES_DIR / current_game
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    # Migrate root-level state.json (old layout) into the game's data dir
-    old_state = SCRIPT_DIR / "state.json"
-    new_state  = data_dir / "state.json"
-    if old_state.exists() and not new_state.exists():
-        old_state.rename(new_state)
+    new_state = data_dir / "state.json"
+
+    # Migrate root-level state.json (old single-game layout) into stellar_blade's data dir.
+    # Only do this for stellar_blade — it was the only game before multi-game support was
+    # added, so a root-level state.json can only contain stellar_blade mods.
+    if current_game == "stellar_blade":
+        old_state = SCRIPT_DIR / "state.json"
+        if old_state.exists() and not new_state.exists():
+            old_state.rename(new_state)
 
     STATE_FILE = new_state
 
@@ -92,13 +96,17 @@ def load_config() -> dict:
         IGNORED_FILENAMES.clear(); IGNORED_FILENAMES.update(set(profile["ignored_filenames"]))
 
     cfg = {
-        "game_id":        current_game,
-        "game_root":      Path(game_cfg["game_root"]).expanduser().resolve(),
-        "mods_dir":       (data_dir / game_cfg.get("mods_dir", "mods")).resolve(),
-        "compressed_dir": (data_dir / game_cfg.get("compressed_dir", "compressed")).resolve(),
-        "nexus_api_key":  raw.get("nexus_api_key", game_cfg.get("nexus_api_key", "")),
-        "profile":        profile,
-        "data_dir":       data_dir,
+        "game_id":          current_game,
+        "game_root":        Path(game_cfg["game_root"]).expanduser().resolve(),
+        "mods_dir":         (data_dir / (game_cfg.get("mods_dir") or "mods")).resolve(),
+        "compressed_dir":   (data_dir / (game_cfg.get("compressed_dir") or "compressed")).resolve(),
+        "nexus_api_key":    raw.get("nexus_api_key", game_cfg.get("nexus_api_key", "")),
+        "profile":          profile,
+        "data_dir":         data_dir,
+        # Bethesda games: user override wins over profile default
+        "plugins_txt_path": game_cfg.get("plugins_txt_path", ""),
+        # External tools: wine/proton command for launching Windows .exe tools on Linux
+        "wine_cmd":         game_cfg.get("wine_cmd", "wine"),
     }
     cfg["mods_dir"].mkdir(parents=True, exist_ok=True)
     cfg["compressed_dir"].mkdir(parents=True, exist_ok=True)

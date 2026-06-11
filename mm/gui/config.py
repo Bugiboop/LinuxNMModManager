@@ -81,12 +81,19 @@ def _load_config() -> dict:
     except Exception:
         profile = {}
 
+    game_root_raw = game_cfg.get("game_root", "")
+    game_root = Path(game_root_raw).expanduser().resolve() if game_root_raw else None
+
     return {
-        "game_id":        current_game,
-        "mods_dir":       (data_dir / game_cfg.get("mods_dir", "mods")).resolve(),
-        "compressed_dir": (data_dir / game_cfg.get("compressed_dir", "compressed")).resolve(),
-        "nexus_api_key":  raw.get("nexus_api_key", game_cfg.get("nexus_api_key", "")).strip(),
-        "data_dir":       data_dir,
+        "game_id":          current_game,
+        "game_root":        game_root,
+        "mods_dir":         (data_dir / (game_cfg.get("mods_dir") or "mods")).resolve(),
+        "compressed_dir":   (data_dir / (game_cfg.get("compressed_dir") or "compressed")).resolve(),
+        "nexus_api_key":    raw.get("nexus_api_key", game_cfg.get("nexus_api_key", "")).strip(),
+        "data_dir":         data_dir,
+        "profile":          profile,
+        "plugins_txt_path": game_cfg.get("plugins_txt_path", ""),
+        "wine_cmd":         game_cfg.get("wine_cmd", "wine"),
     }
 
 

@@ -127,39 +127,58 @@ class SidebarMixin:
         btns.grid(row=4, column=0, sticky="ew", padx=12, pady=12)
         btns.grid_columnconfigure((0, 1), weight=1)
 
+        # Deploy button — spans full width, green when changes are pending
+        self._btn_deploy = ctk.CTkButton(
+            btns, text="▶ Deploy", height=38, state="disabled",
+            fg_color=("gray72", "gray30"), hover_color=("gray62", "gray38"),
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._deploy_staged,
+        )
+        self._btn_deploy.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        attach_tooltip(self._btn_deploy,
+                       "Apply all staged enable/disable changes to the game directory")
+
         _ena_all = ctk.CTkButton(
             btns, text="Enable All", height=34,
-            command=lambda: self._run_interactive(["--enable"], on_done=self.refresh_mods),
+            command=self._stage_enable_all,
         )
-        _ena_all.grid(row=0, column=0, padx=(0, 4), sticky="ew")
-        attach_tooltip(_ena_all, "Enable every mod in the list")
+        _ena_all.grid(row=1, column=0, padx=(0, 4), sticky="ew")
+        attach_tooltip(_ena_all, "Stage every on-disk mod for enabling (then Deploy)")
 
         _dis_all = ctk.CTkButton(
-            btns, text="Disable All", height=34,
+            btns, text="Purge All", height=34,
             fg_color=("gray72", "gray30"), hover_color=("gray62", "gray38"),
-            command=lambda: self._run_bg(["--disable"], on_done=self.refresh_mods),
+            command=self._disable_all_mods,
         )
-        _dis_all.grid(row=0, column=1, padx=(4, 0), sticky="ew")
-        attach_tooltip(_dis_all, "Disable every currently enabled mod")
+        _dis_all.grid(row=1, column=1, padx=(4, 0), sticky="ew")
+        attach_tooltip(_dis_all, "Immediately remove all mod symlinks from the game directory")
 
         self._btn_enable_sel = ctk.CTkButton(
             btns, text="Enable Selected", height=34, state="disabled",
             fg_color=("gray72", "gray30"), hover_color=("#1a6aaa", "#1a5a8a"),
             command=self._enable_selected,
         )
-        self._btn_enable_sel.grid(row=1, column=0, padx=(0, 4), pady=(6, 0), sticky="ew")
-        attach_tooltip(self._btn_enable_sel, "Enable all checked mods")
+        self._btn_enable_sel.grid(row=2, column=0, padx=(0, 4), pady=(6, 0), sticky="ew")
+        attach_tooltip(self._btn_enable_sel, "Stage checked mods for enabling")
 
         self._btn_disable_sel = ctk.CTkButton(
             btns, text="Disable Selected", height=34, state="disabled",
             fg_color=("gray72", "gray30"), hover_color=("gray52", "gray42"),
             command=self._disable_selected,
         )
-        self._btn_disable_sel.grid(row=1, column=1, padx=(4, 0), pady=(6, 0), sticky="ew")
-        attach_tooltip(self._btn_disable_sel, "Disable all checked mods")
+        self._btn_disable_sel.grid(row=2, column=1, padx=(4, 0), pady=(6, 0), sticky="ew")
+        attach_tooltip(self._btn_disable_sel, "Stage checked mods for disabling")
+
+        self._btn_extract_sel = ctk.CTkButton(
+            btns, text="Extract Selected", height=34, state="disabled",
+            fg_color=("gray72", "gray30"), hover_color=("#a06008", "#6a3a04"),
+            command=self._extract_selected,
+        )
+        self._btn_extract_sel.grid(row=3, column=0, columnspan=2, pady=(6, 0), sticky="ew")
+        attach_tooltip(self._btn_extract_sel, "Extract all checked archives")
 
         util = ctk.CTkFrame(btns, fg_color="transparent")
-        util.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        util.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         util.grid_columnconfigure((0, 1), weight=1)
 
         self._btn_clear_sel = ctk.CTkButton(
@@ -310,22 +329,24 @@ class SidebarMixin:
         name  = item["name"]
 
         if itype == "mod":
-            is_on    = item["is_on"]
-            symlinks = item["symlinks"]
-            exists   = item["exists"]
-            disp     = item["disp"]
-            checked  = name in self._selected
+            is_on     = item["is_on"]
+            symlinks  = item["symlinks"]
+            exists    = item["exists"]
+            disp      = item["disp"]
+            conflicts = item.get("conflicts", 0)
+            checked   = name in self._selected
         else:  # archive
-            is_on    = False
-            symlinks = 0
-            exists   = False
-            disp     = item["disp"]
-            checked  = False
+            is_on     = False
+            symlinks  = 0
+            exists    = False
+            disp      = item["disp"]
+            conflicts = 0
+            checked   = False
 
         shell.grid_propagate(True)
         shell.grid_columnconfigure(2, weight=1)
 
-        # col 0 – checkbox (mod) or spacer (archive)
+        # col 0 – checkbox
         if itype == "mod":
             cb_var = ctk.BooleanVar(value=checked)
             self._checkboxvars[name] = cb_var
@@ -337,9 +358,16 @@ class SidebarMixin:
             cb.grid(row=0, column=0, padx=(8, 2), pady=8)
             if not exists:
                 cb.configure(state="disabled")
-        else:
-            ctk.CTkLabel(shell, text="", width=20).grid(
-                row=0, column=0, padx=(8, 2))
+        else:  # archive
+            arc_checked = name in self._selected_archives
+            arc_var = ctk.BooleanVar(value=arc_checked)
+            self._checkboxvars[name] = arc_var
+            cb = ctk.CTkCheckBox(
+                shell, text="", variable=arc_var,
+                width=20, checkbox_width=15, checkbox_height=15,
+                command=lambda n=name, v=arc_var: self._on_archive_checkbox_change(n, v),
+            )
+            cb.grid(row=0, column=0, padx=(8, 2), pady=8)
 
         # col 1 – status dot
         if itype == "archive":
@@ -360,9 +388,18 @@ class SidebarMixin:
         name_lbl.grid(row=0, column=2, sticky="w", padx=4)
         self._name_labels[name] = name_lbl
 
-        # col 3 – badge
+        # col 3 – badge (conflict warning or symlink count or archive label)
         badge = None
-        if itype == "mod" and is_on and symlinks:
+        if itype == "mod" and conflicts > 0:
+            badge = ctk.CTkLabel(
+                shell, text=f"⚠ {conflicts}",
+                font=ctk.CTkFont(size=10),
+                text_color=("#7a3a00", "#e08030"),
+                fg_color=("#fde8c8", "#3a2000"),
+                corner_radius=4, width=40, height=18,
+            )
+            badge.grid(row=0, column=3, padx=6)
+        elif itype == "mod" and is_on and symlinks:
             badge = ctk.CTkLabel(
                 shell, text=str(symlinks),
                 font=ctk.CTkFont(size=10),

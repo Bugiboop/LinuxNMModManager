@@ -21,6 +21,9 @@ from .sidebar import SidebarMixin
 from .panels import PanelsMixin
 from .runner import RunnerMixin
 from .downloads import DownloadsMixin
+from .plugins_panel import PluginsPanelMixin
+from .conflicts_panel import ConflictsPanelMixin
+from .ini_panel import IniPanelMixin
 from .nexus import _nexus_id, _nexus_id_cache, _display_name, _nexus_file_version
 from .dialogs import _InteractiveDialog, _detect_prompt
 from .info import _read_mod_info
@@ -31,7 +34,7 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
-class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.CTk):
+class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, PluginsPanelMixin, ConflictsPanelMixin, IniPanelMixin, ctk.CTk):
 
     def __init__(self, nxm_url: str | None = None):
         super().__init__()
@@ -43,10 +46,11 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self._switches:      dict     = {}
-        self._cards:         dict     = {}
-        self._checkboxvars:  dict     = {}   # name → BooleanVar for batch-select
-        self._selected:      set      = set()  # batch-checked mods
+        self._switches:           dict     = {}
+        self._cards:              dict     = {}
+        self._checkboxvars:       dict     = {}   # name → BooleanVar for batch-select
+        self._selected:           set      = set()  # batch-checked mods
+        self._selected_archives:  set      = set()  # batch-checked archives
         self._focused:       str|None = None   # mod whose info is shown
         self._all_mods:      list     = []     # ordered mod names for arrow-key nav
         self._on_disk:       set      = set()
@@ -94,6 +98,13 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
         # Start IPC server so nxm:// links from a second invocation reach us
         from mm.gui.ipc import start_server as _ipc_start
         _ipc_start(lambda url: self.after(0, lambda u=url: self._on_nxm_received(u)))
+
+        # Prime _NEXUS_CACHE_DIR for the active game before the background thread
+        # captures it — otherwise it defaults to the legacy root-level path.
+        try:
+            _gc._load_config()
+        except Exception:
+            pass
 
         # Load nexus disk cache in a background thread so the window appears
         # immediately, then populate the mod list once the cache is ready.
@@ -178,6 +189,8 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
         """Save current_game to config and reload the mod list."""
         if game_id == self._current_game:
             return
+        self._spinner_start("Switching…")
+        self.update_idletasks()   # ensure spinner renders before any blocking work
         try:
             with open(CONFIG_FILE) as f:
                 raw = json.load(f)
@@ -190,10 +203,13 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
             raw["current_game"] = game_id
             CONFIG_FILE.write_text(json.dumps(raw, indent=2))
         except Exception as e:
+            self._spinner_stop()
             tkmsgbox.showerror("Switch Game", f"Could not update config:\n{e}")
             return
         self._nexus_cache.clear()
         self._nexus_fetching.clear()
+        from mm.gui.nexus import _nexus_id_cache
+        _nexus_id_cache.clear()
         self.refresh_mods()
 
     def _add_game_dialog(self):
@@ -272,6 +288,8 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
             win.destroy()
             self._nexus_cache.clear()
             self._nexus_fetching.clear()
+            self._spinner_start("Loading…")
+            self.update_idletasks()
             self.refresh_mods()
 
         btn_bar = ctk.CTkFrame(win, fg_color=("gray86", "gray17"), corner_radius=0)
@@ -528,6 +546,83 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
         row = _path_row("Mods Folder",     "mods_dir",       row)
         row = _path_row("Archives Folder", "compressed_dir", row)
 
+        # ── Plugins (Bethesda games only) ─────────────────────────────
+        if self._profile and self._profile.get("plugin_extensions"):
+            row = _section_header("PLUGINS", row)
+
+            f = ctk.CTkFrame(scroll, fg_color="transparent")
+            f.grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 2))
+            f.grid_columnconfigure(1, weight=1)
+            row += 1
+
+            ctk.CTkLabel(f, text="Plugins.txt", width=120, anchor="w",
+                         font=ctk.CTkFont(size=12),
+                         ).grid(row=0, column=0, sticky="w", pady=4)
+
+            profile_default = self._profile.get("plugins_txt_path", "")
+            plugins_txt_var = ctk.StringVar(
+                value=game_section.get("plugins_txt_path", "") or profile_default)
+            path_vars["plugins_txt_path"] = plugins_txt_var
+            ctk.CTkEntry(f, textvariable=plugins_txt_var,
+                         placeholder_text="Path to Plugins.txt",
+                         ).grid(row=0, column=1, sticky="ew", padx=(0, 6))
+
+            def _browse_plugins_txt(v=plugins_txt_var):
+                p = tkinter.filedialog.askopenfilename(
+                    title="Select Plugins.txt",
+                    filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                    parent=win,
+                )
+                if p:
+                    v.set(p)
+
+            ctk.CTkButton(f, text="Browse…", width=80, height=28,
+                          fg_color=("gray72", "gray30"),
+                          hover_color=("gray62", "gray38"),
+                          font=ctk.CTkFont(size=11),
+                          command=_browse_plugins_txt,
+                          ).grid(row=0, column=2)
+
+            ctk.CTkLabel(
+                scroll,
+                text="Usually inside your Proton/Wine prefix at "
+                     "AppData/Local/<Game>/Plugins.txt",
+                font=ctk.CTkFont(size=10),
+                text_color=("gray55", "gray50"), anchor="w",
+            ).grid(row=row, column=0, sticky="w", padx=32, pady=(0, 4))
+            row += 1
+
+        # ── External Tools (Wine/Proton) ───────────────────────────────
+        if self._profile and self._profile.get("external_tools"):
+            wine_tools = [t for t in self._profile["external_tools"]
+                          if t.get("launcher") in ("wine", "proton")]
+            if wine_tools:
+                row = _section_header("EXTERNAL TOOLS", row)
+
+                f = ctk.CTkFrame(scroll, fg_color="transparent")
+                f.grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 2))
+                f.grid_columnconfigure(1, weight=1)
+                row += 1
+
+                ctk.CTkLabel(f, text="Wine/Proton\nCommand", width=120, anchor="w",
+                             font=ctk.CTkFont(size=12),
+                             ).grid(row=0, column=0, sticky="w", pady=4)
+
+                wine_var = ctk.StringVar(value=game_section.get("wine_cmd", "wine"))
+                path_vars["wine_cmd"] = wine_var
+                ctk.CTkEntry(f, textvariable=wine_var,
+                             placeholder_text="wine",
+                             ).grid(row=0, column=1, sticky="ew", padx=(0, 6))
+
+                ctk.CTkLabel(
+                    scroll,
+                    text="Command used to run Windows .exe tools (BodySlide, Nemesis…).\n"
+                         "Use 'wine', or a full path to a Proton binary.",
+                    font=ctk.CTkFont(size=10),
+                    text_color=("gray55", "gray50"), anchor="w", justify="left",
+                ).grid(row=row, column=0, sticky="w", padx=32, pady=(0, 4))
+                row += 1
+
         # ── Appearance ────────────────────────────────────────────────
         row = _section_header("APPEARANCE", row)
 
@@ -553,11 +648,21 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
             new_raw = dict(raw)
             new_raw["theme"] = theme_var.get()
             new_raw["nexus_api_key"] = api_var.get().strip()
-            new_raw.setdefault("games", {})[current_game] = {
+            game_data = {
                 "game_root":      path_vars["game_root"].get().strip(),
                 "mods_dir":       path_vars["mods_dir"].get().strip(),
                 "compressed_dir": path_vars["compressed_dir"].get().strip(),
             }
+            # Optional Bethesda fields (only present when profile has them)
+            if "plugins_txt_path" in path_vars:
+                v = path_vars["plugins_txt_path"].get().strip()
+                if v:
+                    game_data["plugins_txt_path"] = v
+            if "wine_cmd" in path_vars:
+                v = path_vars["wine_cmd"].get().strip()
+                if v:
+                    game_data["wine_cmd"] = v
+            new_raw.setdefault("games", {})[current_game] = game_data
             try:
                 CONFIG_FILE.write_text(json.dumps(new_raw, indent=2))
             except Exception as e:
@@ -586,12 +691,18 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
 
     # ── Mod list ──────────────────────────────────────────────────────
 
-    def refresh_mods(self):
+    def refresh_mods(self, _skip_info_panel: bool = False):
+        # Cancel any pending debounced refresh so we don't double-fire
+        if hasattr(self, "_nexus_sort_after") and self._nexus_sort_after:
+            self.after_cancel(self._nexus_sort_after)
+            self._nexus_sort_after = None
+
         try:
             cfg   = _gc._load_config()
             state = _gc._load_state()
         except Exception as e:
             self._log_write(f"[error] Could not load config/state: {e}\n")
+            self._spinner_stop()
             return
         self._cfg          = cfg
         self._state        = state
@@ -610,10 +721,12 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
 
         mods_dir = cfg["mods_dir"]
         self._on_disk = (
-            {d.name for d in mods_dir.iterdir() if d.is_dir()}
+            {d.name for d in mods_dir.iterdir()
+             if d.is_dir() and not d.name.startswith(".")}
             if mods_dir.exists() else set()
         )
-        tracked  = set(state["mods"].keys())
+        # Also exclude dot-named entries that might have ended up in state
+        tracked = {k for k in state["mods"].keys() if not k.startswith(".")}
         sort_mode = self._sort_var.get()
         def _disp_key(n):
             return self._get_disp_name(n).lower()
@@ -640,6 +753,7 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
                         self._archived[p.stem] = p
 
         self._selected &= self._on_disk
+        self._selected_archives &= set(self._archived.keys())
         if self._focused not in self._on_disk and \
                 self._focused not in self._archived:
             self._focused = None
@@ -657,13 +771,20 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
             is_on = ms.get("enabled", False)
             if is_on:
                 enabled += 1
+            from mm.conflicts import get_conflicts_for_mod, get_rule as _get_rule
+            _rules = state.get("conflict_rules", [])
+            total_conflicts = sum(
+                1 for other, _ in get_conflicts_for_mod(name, state)
+                if _get_rule(name, other, _rules) is None
+            )
             self._mods_item_cache[name] = {
-                "type":     "mod",
-                "name":     name,
-                "disp":     self._get_disp_name(name),
-                "is_on":    is_on,
-                "symlinks": len(ms.get("symlinks", [])),
-                "exists":   name in self._on_disk,
+                "type":      "mod",
+                "name":      name,
+                "disp":      self._get_disp_name(name),
+                "is_on":     is_on,
+                "symlinks":  len(ms.get("symlinks", [])),
+                "exists":    name in self._on_disk,
+                "conflicts": total_conflicts,
             }
         self._archive_item_cache = {
             stem: {"type": "archive", "name": stem, "disp": _display_name(stem)}
@@ -682,22 +803,55 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
         self._update_selection_ui()
         self._apply_filter()
 
-        # Kick off background Nexus fetches for all mods with a known ID
-        api_key = cfg.get("nexus_api_key", "")
-        if api_key:
-            for mod_name in list(all_mods) + list(self._archived.keys()):
-                nid = _nexus_id(mod_name)
-                if nid and nid not in self._nexus_cache \
-                        and nid not in self._nexus_fetching:
-                    self._nexus_fetching.add(nid)
-                    threading.Thread(
-                        target=self._bg_fetch_nexus,
-                        args=(nid, api_key),
-                        daemon=True,
-                    ).start()
+        # Nexus data is fetched on-demand when the user selects a mod,
+        # not for all mods upfront.  Batch-fetching 30+ mods at once caused
+        # simultaneous API requests that hit rate-limits, cached error
+        # responses, and then looped endlessly retrying.
 
-        self._update_info_panel(self._focused)
+        if not _skip_info_panel:
+            self._update_info_panel(self._focused)
         self._update_launch_button()
+        self._update_nav_tabs()
+        self._refresh_tools_buttons()
+        self._update_deploy_button()
+        self._spinner_stop()
+
+    def _update_nav_tabs(self):
+        """
+        Sync the nav segmented button to reflect current plugin/conflict state.
+        Rebuilds the button values at most once per call and only when the tab
+        list has actually changed — avoids the CTkSegmentedButton full-redraw
+        that causes a window-wide flash.
+        """
+        has_plugins   = bool((self._profile or {}).get("plugin_extensions"))
+        has_conflicts = any(
+            ms.get("conflicts")
+            for ms in self._state.get("mods", {}).values()
+        )
+        has_ini = bool((self._profile or {}).get("ini_files"))
+
+        self._page_nav_has_plugins   = has_plugins
+        self._page_nav_has_conflicts = has_conflicts
+        self._page_nav_has_ini       = has_ini
+
+        tabs = ["Mods"]
+        if has_plugins:
+            tabs.append("Plugins")
+        if has_conflicts:
+            tabs.append("Conflicts")
+        if has_ini:
+            tabs.append("Game Settings")
+        tabs.append("Downloads")
+
+        # Skip the heavy configure() call if values haven't changed
+        if list(self._page_nav.cget("values")) == tabs:
+            return
+
+        current = self._page_nav.get()
+        self._page_nav.configure(values=tabs)
+        if current not in tabs:
+            self._page_nav.set("Mods")
+            self._on_page_select("Mods")
 
     # ── Filter ────────────────────────────────────────────────────────
 
@@ -863,15 +1017,16 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
                 if nid in self._dup_nids:
                     v = _nexus_file_version(name)
                     if v:
-                        return f"{nexus_name}  [{v}]"
+                        # Put version FIRST so it's visible even when the label
+                        # is truncated in the narrow sidebar card.
+                        return f"[{v}]  {nexus_name}"
                 return nexus_name
         return _display_name(name)
 
     def _maybe_refresh_nexus(self, nid: str):
-        # Update any visible card labels for this nid
+        # Update any visible card labels for this nid immediately (fast, in-place)
         nd = self._nexus_cache.get(nid)
         if nd and not nd.get("_error") and nd.get("name"):
-            nexus_name = nd["name"]
             for mod_name, lbl in list(self._name_labels.items()):
                 if _nexus_id(mod_name) == nid:
                     try:
@@ -879,12 +1034,30 @@ class ModManagerApp(SidebarMixin, PanelsMixin, RunnerMixin, DownloadsMixin, ctk.
                             lbl.configure(text=self._get_disp_name(mod_name))
                     except Exception:
                         pass
-            # Re-sort if a new mod name just arrived (only uncached mods reach here)
-            if self._sort_var.get() in ("Name A→Z", "Name Z→A"):
-                self.refresh_mods()
-        # Refresh info panel if this mod is focused
-        if self._focused and _nexus_id(self._focused) == nid:
-            self._update_info_panel(self._focused)
+
+            # The card label is already updated in-place above; a full list
+            # rebuild to re-sort by Nexus name is not needed for on-demand fetches.
+
+        # Refresh info panel if this mod is currently focused AND the data is valid.
+        # Skip error responses — there's nothing to show, and triggering a rebuild
+        # would restart the fetch loop (the info panel retried failed fetches).
+        _nd = self._nexus_cache.get(nid, {})
+        if (self._focused and _nexus_id(self._focused) == nid
+                and _nd and not _nd.get("_error")):
+            if not hasattr(self, "_nexus_info_after"):
+                self._nexus_info_after = None
+            if self._nexus_info_after:
+                self.after_cancel(self._nexus_info_after)
+            self._nexus_info_after = self.after(
+                150,
+                lambda: setattr(self, "_nexus_info_after", None) or
+                        self._update_info_panel(self._focused),
+            )
+
+    def _nexus_sort_flush(self):
+        """Debounced: rebuild the mod list once after a burst of Nexus completions."""
+        self._nexus_sort_after = None
+        self.refresh_mods(_skip_info_panel=True)
 
 
 def main(nxm_url: str | None = None):

@@ -63,9 +63,18 @@ def _read_mod_info(mod_dir: Path) -> dict:
                     info["image_path"] = hits[0]
                     break
         if "image_path" not in info:
-            # One level deeper
+            # Recursive search — skip fomod/ directories (those are installer preview
+            # images, not mod preview images, and can belong to unrelated tools)
+            def _is_fomod_path(p: Path) -> bool:
+                try:
+                    return any(part.lower() == "fomod"
+                               for part in p.relative_to(mod_dir).parts[:-1])
+                except ValueError:
+                    return False
+
             for ext in ("*.png", "*.jpg", "*.jpeg"):
-                hits = sorted(mod_dir.rglob(ext))
+                hits = [p for p in sorted(mod_dir.rglob(ext))
+                        if not _is_fomod_path(p)]
                 if hits:
                     info["image_path"] = hits[0]
                     break
