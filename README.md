@@ -1,31 +1,60 @@
 # Linux NM Mod Manager
 
-![alt text](https://github.com/Bugiboop/LinuxNMModManager/blob/main/screenshot.png?raw=true)
+![screenshot](https://github.com/Bugiboop/LinuxNMModManager/blob/main/screenshot.png?raw=true)
 
-
-> Symlink-based mod manager with a GUI and full CLI. Game-specific behaviour is defined by a small JSON **game profile**, making it easy to add support for any title.
-
-Currently includes a built-in profile for **Stellar Blade (PC / Steam, Linux)**.
-
-> **Engine compatibility:** This tool is currently designed for **Unreal Engine games** (UE4/UE5). Mod detection, file routing, and asset conflict checking all rely on UE-specific file formats (`.pak`, `.utoc`, `.ucas`) and directory structures (`~mods/`, UE4SS). Games built on other engines (Unity, Godot, id Tech, etc.) use different mod formats and would require new profile logic beyond what the current profile schema supports.
+> Symlink-based mod manager with a GUI and full CLI. Game-specific behaviour is defined by a small JSON **game profile**, making it straightforward to add support for any title.
 
 Your game directory is never directly overwritten. Every mod file is installed as a symlink, and any real game file that needs to be displaced is renamed to `.bak` first — restored automatically when you disable or uninstall.
 
 ---
 
+## Supported Games
+
+| Game | Engine | Built-in Profile |
+|---|---|---|
+| Stellar Blade (PC / Steam) | Unreal Engine 5 | ✓ |
+| Fallout 4 (Steam / Proton) | Bethesda Creation Engine | ✓ |
+| Palworld (PC / Steam) | Unreal Engine 5 | ✓ |
+
+Additional profiles are downloaded automatically from GitHub on first launch. You can also [add your own](#adding-a-new-game).
+
+---
+
 ## Features
 
+### Core
 - **GUI and CLI** — a clean dark-themed desktop app (`sbmm_gui.py`) and a full-featured command-line interface (`sbmm.py`), both backed by the `mm/` package
 - **Multi-game support** — switch between games from the sidebar; each game gets its own state, mod folder, and Nexus cache
-- **Game profiles** — all game-specific routing rules, extensions, and Nexus settings live in `game_profiles/<id>/<id>.json`; add a new game by creating a subdirectory with a matching JSON file
-- **Nexus Mods integration** — fetches mod names, descriptions, authors, and cover art automatically using your Nexus API key; results are cached locally per game
-- **Automatic mod structure detection** — handles all common Nexus Mods layouts, UE4SS mods, CNS `.json` configs, flat pak drops, and full game-tree paths
-- **Variant selection** — detects mods with multiple version folders (e.g. `Green/`, `Blue/`) and shows a GUI dialog to pick one at extract or enable time
-- **True asset-level conflict detection** — reads `.utoc` table-of-contents files to find mods that overwrite the exact same internal game assets, with no guesswork
-- **Interactive conflict resolution** — `--clean` walks through each conflicting pair with a radio-button dialog; your choices are persisted so you're never asked twice
+- **Game profiles** — all game-specific routing rules live in `game_profiles/<id>/<id>.json`; add a new game by dropping in a JSON file
+- **Wrapper-folder detection** — mods packed as `ModName/files` instead of just `files` are transparently unwrapped at install time
+
+### Nexus Mods
+- **Nexus Mods integration** — fetches mod names, descriptions, authors, and cover art automatically using your API key; cached locally per game
+- **NXM download handler** — registers as the `nxm://` protocol handler so clicking "Mod Manager Download" on Nexus sends the file directly to the app
+- **Download manager** — a Downloads tab tracks in-progress and completed downloads; archives land in the game's `compressed/` folder automatically
+
+### Mod Installation
+- **FOMOD installer** — a built-in multi-page wizard reads `fomod/ModuleConfig.xml` for mods that ship with an installer, showing steps, option descriptions, and preview images; your choices are remembered and pre-populated on re-enable
+- **Variant selection** — detects mods with multiple version subfolders (e.g. `Green/`, `Blue/`) and shows a dialog to pick one; unchosen folders are deleted so they can never create phantom conflicts
+- **Automatic mod structure detection** — handles all common Nexus layouts, UE4SS mods, flat pak drops, full game-tree paths, and Bethesda `Data/`-rooted archives
+
+### Bethesda Engine (Fallout 4 / Skyrim)
+- **Plugin load order** — a Plugins tab shows all active `.esp`/`.esm`/`.esl` plugins in load order; enabling a mod registers its plugins in `Plugins.txt` automatically
+- **FOMOD priority support** — correctly handles `<file priority="…">` attributes so conflicting FOMOD destinations resolve to the highest-priority source
+- **External tool launcher** — detect and launch Wine/Proton tools (BodySlide, Outfit Studio, Nemesis, LOOT) directly from the app; the tool bar appears automatically when tools are found in your mod list
+- **Script extender launch** — the Launch button switches to "Launch via F4SE / SKSE" automatically when the script extender executable is detected in your game root
+- **Game Settings (INI editor)** — a Game Settings tab exposes common INI options (resolution presets, fullscreen/borderless, VSync, shadow quality, FOV, mouse acceleration) as simple controls; settings are defined in the game profile JSON and written directly to the INI files on save
+
+### Conflict Detection
+- **True asset-level conflict detection** — reads `.utoc` table-of-contents files to find mods that overwrite the exact same internal UE5 assets
+- **Conflict panel** — a Conflicts tab in the GUI lists all conflicting mod pairs; rules you set (priority or coexist) are saved and applied at deploy time
+- **Symlink-level report** — `--conflicts` gives a fast CLI report of mods competing for the same target path
+
+### Info & Utilities
+- **Files tab** — the info panel's Files tab lists every file a mod has installed, with per-file toggle switches for plugins and per-directory summaries for assets
+- **Asset search** — search inside mod files for any internal game asset path or string without opening a file manager
 - **Integrity checking** — `--check` verifies every recorded symlink still exists and points to the right file
-- **Safe uninstall** — all symlinks removed, all `.bak` files restored in one command
-- **Settings window** — configure your Nexus API key, game paths, and appearance without editing files directly
+- **Settings window** — configure your Nexus API key, game paths, Plugins.txt path, Wine/Proton command, and appearance without editing files directly
 
 ---
 
@@ -48,7 +77,7 @@ Python, pip, and a virtual environment are **not required** when using the pre-b
 ### Pre-built executable (recommended)
 
 1. Download `ModManager-<version>-linux.zip` from the [Releases](https://github.com/Bugiboop/LinuxNMModManager/releases) page and extract it
-2. Edit `config.json` and set `game_root` to your game installation path:
+2. Edit `config.json` and set the game root for each game you want to use:
 
 ```json
 {
@@ -56,6 +85,10 @@ Python, pip, and a virtual environment are **not required** when using the pre-b
   "games": {
     "stellar_blade": {
       "game_root": "/home/user/.local/share/Steam/steamapps/common/StellarBlade",
+      "nexus_api_key": ""
+    },
+    "fallout4": {
+      "game_root": "/home/user/.local/share/Steam/steamapps/common/Fallout 4",
       "nexus_api_key": ""
     }
   },
@@ -73,7 +106,6 @@ Game profiles are downloaded automatically from GitHub on first launch.
 git clone https://github.com/Bugiboop/LinuxNMModManager.git
 cd LinuxNMModManager
 
-# Create the virtual environment and install GUI dependencies
 python3 -m venv .venv
 .venv/bin/pip install customtkinter Pillow
 ```
@@ -96,16 +128,29 @@ python sbmm.py                 # CLI
 .venv/bin/python sbmm_gui.py   # from source
 ```
 
-- The **game selector** dropdown (top-left of sidebar) switches between configured games; the **+** button adds a new one
-- The left sidebar lists all mods — **click** a card to view its info; **check the checkbox** to batch-select
+**Sidebar**
+- The **game selector** dropdown (top-left) switches between configured games; **+** adds a new one
+- Each card has an enable/disable toggle switch; **check the checkbox** to batch-select
 - **Enable All / Disable All** toggle everything; **Enable Selected / Disable Selected** act on checked mods
-- Individual switches enable/disable single mods
-- The **⚙ settings button** opens a settings window for API key, paths, and theme (per game)
-- The **info panel** shows mod metadata, cover art (fetched from Nexus if an API key is set), a folder button, and a Nexus link
+- The **⚙ settings** button opens the settings window for API key, paths, and theme
+
+**Navigation tabs**
+- **Mods** — mod list and info panel (default)
+- **Plugins** — plugin load order for Bethesda games; shows owning mod beside each entry *(shown only for Bethesda-engine games)*
+- **Conflicts** — lists conflicting mod pairs; set priority rules or mark pairs as intentionally coexisting *(shown when conflicts exist)*
+- **Game Settings** — INI editor with common display, gameplay, and FOV options *(shown for games with INI settings defined in their profile)*
+- **Downloads** — active and completed NXM downloads
+
+**Info panel tabs**
+- **Info** — mod metadata, cover art (fetched from Nexus), status, conflict notes
+- **Files** — every installed file; toggle plugins on/off individually; directory summaries for asset files
+- **Assets** — internal game asset paths extracted from `.utoc` files
+
+**Other**
 - Hovering the cover art shows it full-size in a floating overlay
-- The **Assets tab** lists every internal game asset the mod affects, extracted from `.utoc` files
-- The **output panel** at the bottom streams live command output; interactive prompts (variant selection, conflict resolution) open GUI dialogs automatically
-- Arrow keys (↑ / ↓) navigate the mod list; the scroll wheel works throughout
+- Arrow keys (↑ / ↓) navigate the mod list
+- The **output panel** at the bottom streams live command output; interactive prompts (FOMOD wizard, variant selection) open GUI dialogs automatically
+- The **Launch** button in the nav bar starts the game via Steam, or via F4SE/SKSE if the script extender is detected
 
 ### CLI
 
@@ -121,7 +166,7 @@ python sbmm.py                 # CLI
 
 ./ModManager --list
 ./ModManager --conflicts        # symlink-level conflict report
-./ModManager --assetcheck       # internal asset-level conflict report
+./ModManager --assetcheck       # internal asset-level conflict report (UE5)
 ./ModManager --clean            # interactive conflict resolution
 ./ModManager --check            # integrity check
 ./ModManager --purge            # remove stale state entries
@@ -132,30 +177,71 @@ When running from source, replace `./ModManager` with `python sbmm.py`.
 
 ---
 
+## Bethesda Engine Games (Fallout 4, Skyrim SE)
+
+### Setup
+
+Fallout 4 and Skyrim SE run through Steam/Proton on Linux. The mod manager needs two additional paths configured in **Settings**:
+
+- **Plugins.txt** — inside the Proton prefix, usually at:
+  `~/.local/share/Steam/steamapps/compatdata/<appid>/pfx/drive_c/users/steamuser/AppData/Local/<Game>/Plugins.txt`
+- **Wine/Proton Command** — command used to launch `.exe` tools like BodySlide. Set this to `wine`, or a full path to a Proton binary (e.g. `~/.local/share/Steam/steamapps/common/Proton 9.0/proton`).
+
+The app will auto-detect the paths from your `game_root` setting where possible.
+
+### FOMOD installer
+
+Mods that ship with a `fomod/ModuleConfig.xml` installer open the FOMOD wizard automatically when you enable them. The wizard shows each page of options with descriptions and preview images. Your selections are saved so the wizard reopens pre-populated if you re-enable the mod.
+
+Mods with no install steps (required files only) install silently.
+
+### Plugin load order
+
+The **Plugins** tab lists all active plugins in load order, with the owning mod shown beside each entry. Load order is determined by the position of each `*PluginName.ext` line in `Plugins.txt`. Enabling a mod appends its plugins; disabling a mod deactivates them (removes the `*` prefix but preserves position).
+
+### External tools
+
+The mod manager detects tools installed as mods (BodySlide, Outfit Studio, Nemesis, LOOT) and shows a button bar below the action buttons when any are found. Clicking a tool launches it via the configured Wine/Proton command with the correct working directory.
+
+### Game Settings (INI editor)
+
+The **Game Settings** tab provides a form-based editor for common INI options, grouped by file and category. For Fallout 4 these include:
+
+| Setting | INI file |
+|---|---|
+| Resolution (preset dropdown + custom W×H) | `Fallout4Prefs.ini` |
+| Full Screen / Borderless Window | `Fallout4Prefs.ini` |
+| VSync | `Fallout4Prefs.ini` |
+| Shadow Resolution | `Fallout4Prefs.ini` |
+| Mouse Acceleration | `Fallout4Prefs.ini` |
+| 1st Person FOV / 3rd Person FOV | `Fallout4.ini` |
+
+Click **Save** to write changes directly to the INI files. No game restart prompt — changes take effect on next game launch.
+
+The settings exposed in this panel are defined by the `ini_files` array in the game profile JSON, so adding new settings requires only a profile edit.
+
+---
+
 ## Adding a New Game
 
 ### 1. Create the profile
 
-Create a directory `game_profiles/<game_id>/` and drop a file named `<game_id>.json` inside it. The `game_id` must be a lowercase, underscore-separated identifier (e.g. `black_myth_wukong`).
+Create a directory `game_profiles/<game_id>/` and drop a file named `<game_id>.json` inside it. The `game_id` must be a lowercase, underscore-separated identifier.
 
-```
-game_profiles/
-└── black_myth_wukong/
-    └── black_myth_wukong.json
-```
+**Unreal Engine example:**
 
 ```json
 {
   "id": "my_game",
   "name": "My Game",
   "nexus_slug": "mygame",
+  "steam_app_id": "123456",
   "pak_extensions": [".pak", ".ucas", ".utoc", ".sig"],
   "asset_extensions": [".uasset", ".ubulk", ".uexp", ".umap"],
   "utoc_strip_prefixes": ["../../../", "MyGame/Content/"],
   "ignored_filenames": ["modinfo.ini", "1.png"],
   "install_rules": [
     { "anchor": "MyGame",  "prefix": "",                    "case_insensitive": false },
-    { "anchor": "Content", "prefix": "MyGame",              "case_insensitive": false },
     { "anchor": "~mods",   "prefix": "MyGame/Content/Paks", "case_insensitive": true,
       "bare_returns_none": true }
   ],
@@ -167,11 +253,42 @@ game_profiles/
 }
 ```
 
-Fields marked with `"ue4ss": null` (or omitted entirely) disable UE4SS registration for that game.
+**Bethesda Creation Engine example:**
+
+```json
+{
+  "id": "skyrim_se",
+  "name": "Skyrim Special Edition",
+  "nexus_slug": "skyrimspecialedition",
+  "steam_app_id": "489830",
+  "launch_exe": "SkyrimSE.exe",
+  "script_extender_exe": "skse64_loader.exe",
+  "pak_extensions": [".esp", ".esm", ".esl", ".bsa", ".dll", ".pex", ".nif", ".dds"],
+  "plugin_extensions": [".esp", ".esm", ".esl"],
+  "plugins_txt_path": "~/.local/share/Steam/steamapps/compatdata/489830/pfx/drive_c/users/steamuser/AppData/Local/Skyrim Special Edition/Plugins.txt",
+  "plugins_txt_relative": "users/steamuser/AppData/Local/Skyrim Special Edition/Plugins.txt",
+  "ignored_filenames": ["modinfo.ini", "readme.txt", "moduleconfig.xml"],
+  "ignored_directories": ["fomod"],
+  "install_rules": [
+    { "anchor": "Data", "prefix": "", "case_insensitive": true }
+  ],
+  "default_install_path": "Data",
+  "data_subdir_anchors": ["Meshes", "Textures", "Scripts", "Interface", "Sound"],
+  "external_tools": [
+    {
+      "id": "bodyslide",
+      "name": "BodySlide",
+      "detect_path": "Data/Tools/BodySlide/BodySlide x64.exe",
+      "launcher": "wine",
+      "launch_args": []
+    }
+  ]
+}
+```
 
 ### 2. Add the game in the GUI
 
-Click the **+** button at the top of the sidebar, pick your new profile from the dropdown, and set the game root path. The app switches to the new game immediately.
+Click the **+** button in the sidebar, pick your new profile from the dropdown, and set the game root path.
 
 Or add it manually to `config.json`:
 
@@ -181,8 +298,7 @@ Or add it manually to `config.json`:
   "games": {
     "stellar_blade": { "game_root": "/path/to/StellarBlade" },
     "my_game":       { "game_root": "/path/to/MyGame" }
-  },
-  "theme": "dark"
+  }
 }
 ```
 
@@ -190,181 +306,187 @@ Or add it manually to `config.json`:
 
 ## Profile Reference
 
+### Core fields
+
 | Field | Type | Description |
 |---|---|---|
-| `id` | string | Must match both the subdirectory name and the filename (without `.json`) |
+| `id` | string | Must match the subdirectory name and filename (without `.json`) |
 | `name` | string | Display name shown in the GUI |
 | `nexus_slug` | string | Game identifier on Nexus Mods (from the URL) |
+| `steam_app_id` | string | Steam application ID (used for the Launch button and Proton path derivation) |
 | `pak_extensions` | array | File extensions treated as mod files |
 | `asset_extensions` | array | Extensions recognised as UE5 assets inside `.utoc` |
 | `utoc_strip_prefixes` | array | Path prefixes stripped from asset paths in the Assets tab |
 | `ignored_filenames` | array | Files inside mod folders that are never symlinked |
+| `ignored_directories` | array | Subdirectories inside mod folders that are skipped entirely (e.g. `fomod`) |
 | `install_rules` | array | Ordered anchor rules — see below |
 | `default_install_path` | string | Catch-all destination (relative to `game_root`) |
+| `data_subdir_anchors` | array | Well-known subdirectory names used as routing anchors when no install rule matches |
 | `special_extension_paths` | object | Extension → path overrides for the catch-all |
 | `ue4ss` | object or null | UE4SS settings; omit or set to `null` to disable |
+
+### Bethesda fields
+
+| Field | Type | Description |
+|---|---|---|
+| `launch_exe` | string | Game executable filename |
+| `script_extender_exe` | string | Script extender executable (e.g. `f4se_loader.exe`); enables the F4SE/SKSE launch button |
+| `plugin_extensions` | array | Extensions treated as Bethesda plugins (shows Plugins tab) |
+| `plugins_txt_path` | string | Default path to `Plugins.txt` (can be overridden in Settings) |
+| `plugins_txt_relative` | string | Path relative to the Proton prefix user directory (used for auto-derivation) |
+| `external_tools` | array | Tools to detect and launch — see below |
+| `ini_files` | array | INI settings to expose in the Game Settings tab — see below |
+| `ini_docs_relative` | string | Path relative to `steamuser/` for the game's documents folder (used to find INI files) |
 
 ### Install rules
 
 Each entry in `install_rules` is checked in order. The first match wins.
 
-```json
-{ "anchor": "~mods", "prefix": "SB/Content/Paks", "case_insensitive": true, "bare_returns_none": true }
+| Key | Description |
+|---|---|
+| `anchor` | Folder name to look for in the mod file's path |
+| `prefix` | Path prepended before the anchor in the output (empty string = `game_root` directly) |
+| `case_insensitive` | Match the anchor case-insensitively |
+| `bare_returns_none` | Skip files where the anchor is the last path component |
+| `dest_root` | Set to `"game_root"` to place the file directly at game root (strips all subfolders; used for F4SE loader DLLs) |
+| `anchor_offset` | Start the output path N steps before the anchor (preserves parent folders) |
+
+**Example resolution** — `mod_root/wrapper/~mods/SubMod/file.pak` with `{ "anchor": "~mods", "prefix": "SB/Content/Paks" }`:
 ```
+anchor found → tail = ~mods/SubMod/file.pak
+output = game_root / "SB/Content/Paks" / "~mods/SubMod/file.pak"
+```
+
+If no rule matches, the engine tries a **game-tree scan** (strips leading wrapper folders until the suffix matches a real file in the game directory), then checks `data_subdir_anchors`, then falls back to `default_install_path`.
+
+### External tools
+
+Each entry in `external_tools` defines one tool button:
 
 | Key | Description |
 |---|---|
-| `anchor` | Folder name to look for inside the mod's file path |
-| `prefix` | Path prepended *before* the anchor in the output (empty string = game_root directly) |
-| `case_insensitive` | Match the anchor case-insensitively (useful for `~mods` / `~Mods`) |
-| `bare_returns_none` | Skip files where the anchor is the last component (i.e. the anchor is itself a directory with no children) |
+| `id` | Internal identifier |
+| `name` | Button label |
+| `detect_path` | Path relative to `game_root` to check for the executable |
+| `detect_path_alt` | Alternate path to check (e.g. 32-bit vs 64-bit binary) |
+| `launcher` | `"wine"` — run via Wine/Proton; `"native"` — run directly |
+| `launch_args` | Extra command-line arguments |
 
-**How a rule resolves a path:**
+### INI settings (Game Settings tab)
 
-Given `mod_root/wrapper/~mods/SubMod/file.pak` with the rule above:
+`ini_files` is an array of file definitions. Each file can expose multiple settings:
+
+```json
+"ini_files": [
+  {
+    "label": "Display",
+    "file": "Fallout4Prefs.ini",
+    "settings": [
+      { "group": "Resolution", "label": "Resolution", "type": "resolution",
+        "section": "Display", "key_w": "iSize W", "key_h": "iSize H" },
+      { "group": "Display", "label": "VSync", "type": "bool",
+        "section": "Display", "key": "iPresentInterval" },
+      { "group": "Display", "label": "Shadow Resolution", "type": "choice",
+        "section": "Display", "key": "iShadowMapResolution",
+        "choices": [
+          {"label": "1024 — Medium", "value": "1024"},
+          {"label": "4096 — Ultra",  "value": "4096"}
+        ]}
+    ]
+  }
+]
 ```
-anchor found at index 1 ("~mods")
-tail  = ~mods/SubMod/file.pak
-output = game_root / "SB/Content/Paks" / "~mods/SubMod/file.pak"
-       = <game_root>/SB/Content/Paks/~mods/SubMod/file.pak
-```
 
-If no rule matches, the engine tries a **game-tree scan** (strips leading wrapper folders until the suffix matches a real file in the game directory), then falls back to `default_install_path`.
+| Setting type | Widget | Notes |
+|---|---|---|
+| `resolution` | Preset dropdown + optional W×H fields | Uses `key_w` and `key_h` instead of `key` |
+| `bool` | Toggle switch | Reads/writes `0`/`1` |
+| `choice` | Dropdown | `choices` array of `{"label", "value"}` |
+| `int` / `float` | Text field | |
 
 ---
 
 ## Nexus Mods Integration
 
-The GUI can automatically fetch mod metadata (name, author, version, description, cover image) from the Nexus Mods API. To enable it:
-
-1. Open Settings (⚙ button) → paste your API key in the **API Key** field
+1. Open Settings (⚙) → paste your API key in the **API Key** field
 2. A link to [nexusmods.com/settings/api-keys](https://www.nexusmods.com/settings/api-keys) is provided in the settings window
-3. Click **Save** — the app will start fetching data for all mods with a recognised Nexus ID in their folder name
+3. Click **Save** — the app fetches metadata for all mods with a recognised Nexus ID in their folder name
 
-The Nexus game is determined by the `nexus_slug` in the active game profile. API responses and cover images are cached in `.nexus_cache/` (per game) so subsequent launches are instant. You can clear the cache from the Settings window at any time.
+The Nexus game is determined by the `nexus_slug` in the active game profile. Responses and cover images are cached per game in `.nexus_cache/`. The cache can be cleared from the Settings window.
 
----
-
-## Directory Layout
-
-### Pre-built release
-
-```
-ModManager-<version>-linux/
-├── ModManager            # standalone executable (GUI + CLI)
-├── config.json           # your configuration (edit or use Settings / + button)
-└── game_profiles/        # populated automatically on first launch
-    └── <game_id>/
-        ├── <game_id>.json   # game profile (downloaded from GitHub)
-        ├── state.json        # auto-managed symlink/backup records
-        ├── .nexus_cache/     # cached Nexus API responses and cover art
-        ├── mods/             # extracted mod folders
-        └── compressed/       # downloaded mod archives
-```
-
-### Source tree
-
-```
-LinuxNMModManager/
-├── sbmm.py               # CLI entry point
-├── sbmm_gui.py           # GUI entry point
-├── config.json           # your configuration
-├── mm/                   # backend + GUI packages
-│   ├── commands.py  config.py  archive.py  resolver.py  …
-│   └── gui/
-│       └── app.py  sidebar.py  panels.py  runner.py  …
-└── game_profiles/        # one subdirectory per supported game
-    └── <game_id>/
-        ├── <game_id>.json   # game profile definition
-        ├── state.json        # auto-managed symlink/backup records
-        ├── .nexus_cache/     # cached Nexus API responses and cover art
-        ├── mods/             # extracted mod folders
-        └── compressed/       # downloaded mod archives
-```
-
-> Per-game `state.json`, `.nexus_cache/`, `mods/`, and `compressed/` are in `.gitignore`.
-
----
-
-## How Mod Structures Are Detected
-
-For each file in a mod folder, the engine walks the `install_rules` list from the active game profile and returns the first match. For Stellar Blade the rules are:
-
-| Priority | Trigger | Destination |
-|:---:|---|---|
-| 1 | Path contains `SB/` | `<game_root>/SB/…` (verbatim) |
-| 2 | Path contains `Binaries/` | `<game_root>/SB/Binaries/…` |
-| 3 | Path contains `Win64/` | `<game_root>/SB/Binaries/Win64/…` |
-| 4 | Path contains `ue4ss/` | `<game_root>/SB/Binaries/Win64/ue4ss/…` |
-| 5 | Path contains `Content/` | `<game_root>/SB/Content/…` |
-| 6 | Path contains `~mods/` | `<game_root>/SB/Content/Paks/~mods/…` |
-| 7 | Suffix matches a real game file | That exact game path |
-| 8 | Everything else | `<game_root>/SB/Content/Paks/~mods/` |
-
-**Special cases (Stellar Blade):**
-- `.json` files → `~mods/CustomNanosuitSystem/`
-- `modinfo.ini`, `1.png`, `mods.txt` → silently ignored (metadata only)
+**NXM downloads** — to register the app as the `nxm://` protocol handler, click "Mod Manager Download" on any Nexus mod page while the app is running. The file downloads in the background and appears in the Downloads tab.
 
 ---
 
 ## Conflict Detection
 
+### Asset-level (UE5 games) — `--assetcheck`
+
+Reads the `.utoc` table-of-contents file inside each mod and extracts every internal asset path the mod modifies. Reports pairs of mods that overwrite the exact same UE5 asset.
+
 ### Symlink-level — `--conflicts`
 
-Read-only report of which mods are competing for the same target path right now. Fast, no scanning.
+Fast CLI report of mods competing for the same target path. Works for all games.
 
-### Asset-level — `--assetcheck`
+### Conflict panel (GUI)
 
-Reads the `.utoc` (IoStore table-of-contents) file inside each mod and extracts every internal asset path the mod modifies. Reports pairs of mods that overwrite the exact same UE5 asset — no filename heuristics, no guesswork.
+The **Conflicts** tab lists all conflicting pairs. For each pair you can:
+- **Set priority** — always prefer one mod over the other
+- **Allow coexist** — mark the pair as intentionally sharing a file (suppresses future warnings)
+
+Rules are saved in `state.json` and applied at deploy time.
 
 ### Interactive resolution — `--clean`
 
-Runs the same asset scan, then walks you through each conflict with a GUI radio-button dialog:
-
-- **`1` or `2`** — delete the loser. Single mods lose their whole folder (archive moved to `compressed-disabled/`). Collection mods (>10 paks) only lose the specific conflicting pak triplets.
-- **`s`** — skip this pair for now.
-- **`a`** — permanently mark this pair as intentionally coexisting. Saved to `state.json`; won't prompt again.
+CLI version of conflict resolution: walks through each conflicting pair with a dialog and lets you delete the loser or mark the pair as coexisting.
 
 ---
 
-## Variant Selection
-
-When a mod ships with multiple version subfolders (e.g. `1 Heavier Physics/`, `2 Thicc/`, `3 Original/`), the script detects the pattern and shows a GUI dialog at **extract time** and **enable time**:
+## Directory Layout
 
 ```
-[variants] 'CNS TsMaids' contains 3 versions — pick one to keep:
-  (1) 1 Heavier physics Thicc  (4 mod file(s))
-  (2) 2 Thicc                  (4 mod file(s))
-  (3) 3 Original body shape    (4 mod file(s))
+LinuxNMModManager/
+├── sbmm.py                  # CLI entry point
+├── sbmm_gui.py              # GUI entry point
+├── config.json              # your configuration (edit or use Settings)
+├── mm/                      # backend + GUI packages
+│   ├── archive.py           # extraction and archive handling
+│   ├── commands.py          # CLI command implementations
+│   ├── config.py            # config load/save, paths
+│   ├── conflicts.py         # conflict detection logic
+│   ├── external_tools.py    # Wine/Proton tool detection and launch
+│   ├── fomod.py             # FOMOD XML parser and file resolver
+│   ├── mods.py              # enable/disable/install logic
+│   ├── plugins.py           # Plugins.txt read/write
+│   ├── repair.py            # integrity repair utilities
+│   ├── resolver.py          # file routing (install rules, game-tree scan)
+│   └── gui/
+│       ├── app.py           # main application window
+│       ├── conflicts_panel.py / conflicts_dialog.py
+│       ├── downloads.py     # download manager panel
+│       ├── fomod_dialog.py  # FOMOD wizard dialog
+│       ├── ini_panel.py     # Game Settings / INI editor panel
+│       ├── panels.py        # info, log, settings panels
+│       ├── plugins_panel.py # plugin load order panel
+│       ├── sidebar.py       # mod list and game selector
+│       └── …
+└── game_profiles/
+    └── <game_id>/
+        ├── <game_id>.json   # game profile definition
+        ├── state.json        # auto-managed (gitignored)
+        ├── mods/             # extracted mod folders (gitignored)
+        └── compressed/       # downloaded mod archives (gitignored)
 ```
-
-Unchosen folders are deleted immediately so they can never create phantom conflicts.
-
----
-
-## Integrity Check — `--check`
-
-Verifies every symlink in `state.json`:
-- Still exists on disk
-- Still points to the correct source file (catches stale state after variant changes)
-
-Also scans `~mods/` for orphaned symlinks not tracked by any mod.
-
----
-
-## Backups
-
-When a mod must replace a file that already exists in the game directory, the original is renamed `<filename>.bak` before the symlink is placed. `--disable` and `--uninstall` restore it automatically.
 
 ---
 
 ## Contributing
 
-Issues and pull requests are welcome. The backend lives in the `mm/` package (`commands.py`, `config.py`, `archive.py`, `resolver.py`, …) and the GUI in `mm/gui/`. Entry points are `sbmm.py` (CLI) and `sbmm_gui.py` (GUI). Runtime dependencies beyond the standard library are `customtkinter` and `Pillow` (GUI only).
+Issues and pull requests are welcome. The backend lives in the `mm/` package and the GUI in `mm/gui/`. Entry points are `sbmm.py` (CLI) and `sbmm_gui.py` (GUI). Runtime dependencies beyond the standard library are `customtkinter` and `Pillow` (GUI only).
 
 Before submitting a PR:
 - Test `--install`, `--disable`, `--enable`, and `--check` against a real mod setup
-- Make sure `--assetcheck` and `--clean` still produce correct output
+- For Bethesda games, verify FOMOD installs, plugin registration, and INI save/load
 
 ---
 
